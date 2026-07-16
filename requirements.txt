@@ -1,0 +1,5 @@
+numpy
+matplotlib
+japanize-matplotlib
+dimod
+dwave-neal
