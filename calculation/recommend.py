@@ -475,6 +475,11 @@ def recommend(
     slack_violation_count = 0
     prerequisite_violation_count = 0
 
+    # エネルギー分布の可視化用。
+    # 実行可能解と制約違反解を分けて記録しておく。
+    feasible_energies = []
+    infeasible_energies = []
+
     for datum in sampleset.data(fields=["sample", "energy"], sorted_by="energy"):
         sample = datum.sample
 
@@ -513,9 +518,14 @@ def recommend(
         if budget_ok and slack_ok and prerequisites_ok:
             feasible_count += 1
 
+            feasible_energies.append(float(datum.energy))
+
             if datum.energy < best_feasible_energy:
                 best_feasible_z = z_candidate.copy()
                 best_feasible_energy = float(datum.energy)
+
+        else:
+            infeasible_energies.append(float(datum.energy))
 
     if best_feasible_z is None:
         raise RuntimeError(
@@ -582,6 +592,8 @@ def recommend(
         "active_synergies": active_synergies,
         "energy": best_feasible_energy,
         "feasible_count": feasible_count,
+        "feasible_energies": feasible_energies,
+        "infeasible_energies": infeasible_energies,
         "budget_violation_count": budget_violation_count,
         "slack_violation_count": slack_violation_count,
         "prerequisite_violation_count": prerequisite_violation_count,
