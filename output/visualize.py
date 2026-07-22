@@ -77,12 +77,13 @@ def plot_results(z, T, field_score, debug_info):
     # 3. アニーリング結果のエネルギー分布
     # --------------------------------------------------------
 
-    # 得られた全サンプルのエネルギーを、実行可能解と制約違反解に
-    # 分けて重ねる。
+    # 得られた全サンプルのエネルギーを、実行可能解
+    # （修復デコード後に予算内）と予算違反解に分けて重ねる。
     #
-    # 低エネルギー側でも制約違反解が混ざるため、
-    # エネルギー最小のサンプルをそのまま採用することはできない。
-    # 実行可能解だけを抽出している理由がこのグラフに表れる。
+    # 前提科目は修復デコードが構造的に担保するため、
+    # 前提違反でサンプルが捨てられることはない。
+    # 採用解は修復後の真の目的関数値（価値＋シナジー）で選ぶため、
+    # 必ずしもエネルギー最小のサンプルとは一致しない。
 
     feasible_energies = debug_info["feasible_energies"]
     infeasible_energies = debug_info["infeasible_energies"]
@@ -96,7 +97,7 @@ def plot_results(z, T, field_score, debug_info):
         infeasible_energies,
         bins=bin_edges,
         color="lightgray",
-        label=f"制約違反 {len(infeasible_energies)}件",
+        label=f"予算違反 {len(infeasible_energies)}件",
     )
 
     axes[2].hist(
