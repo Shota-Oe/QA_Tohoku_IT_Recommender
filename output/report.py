@@ -141,10 +141,24 @@ def print_report(user, hours_per_week, weeks, T, z, field_score, debug_info):
 
     print(f"【制約ペナルティ係数】{debug_info['constraint_penalty']:.3f}")
 
+    if debug_info["pruned_items"]:
+        print(
+            "【予算内で前提を満たせないため候補から除外】"
+            + ", ".join(debug_info["pruned_items"])
+        )
+
     print(
         f"【実行可能サンプル数】{debug_info['feasible_count']}"
         f" / 取得サンプル数{len(debug_info['sampleset'])}"
     )
+
+    print(
+        f"【前提科目を修復したサンプル数】"
+        f"{debug_info['prerequisite_repair_count']}"
+        f"（修復後の候補はすべて前提充足）"
+    )
+
+    print(f"【採用解の目的関数値（価値＋シナジー）】{debug_info['best_score']:.3f}")
 
     print(f"【採用解のQUBOエネルギー】{debug_info['energy']:.3f}")
 

@@ -8,11 +8,18 @@
   ↓
 所属分野の相性を合計して学習項目価値を計算
   ↓
+候補集合の生成＋前提科目の前処理
+（予算内で前提を満たせない項目の除外・前提科目の候補追加）
+  ↓
 項目ペアのシナジー（同時に選んだ場合だけ発生する価値）を算出
   ↓
-予算制約・前提科目制約・シナジー項をQUBO化
+予算制約・シナジー項・条件付き価値をQUBO化
+（前提科目のペナルティ項は目的関数に含めない）
   ↓
-アニーリングによって推薦項目を決定
+アニーリング
+  ↓
+各サンプルを修復デコード（前提未達の子項目を除去／不足親を補完）し、
+真の目的関数値（価値＋シナジー）が最大の実行可能解を採用
 """
 
 import math
@@ -25,6 +32,9 @@ from calculation.encoding import bounded_binary_weights
 from calculation.prerequisites import (
     add_prerequisites_to_candidates,
     check_prerequisites,
+    complete_prerequisites,
+    repair_prerequisites,
+    restrict_candidates_by_budget,
 )
 from config.fields import F
 from config.items import M, hours, item_fields, item_index, item_names
@@ -157,9 +167,33 @@ def recommend(
     )
 
     # 分野関連度がまったくない項目は候補外。
-    # ただし、候補項目に必要な前提科目は候補へ追加される。
+    #
+    # さらに、前提クロージャ込みの最小学習時間が予算Tを超える項目は、
+    # 「前提を満たしつつ予算内」の解に決して現れないため候補から外す
+    # （前提科目制約の前処理その1：候補集合の制限）。
 
-    candidate_mask = add_prerequisites_to_candidates(item_value > 0.0)
+    candidate_mask = item_value > 0.0
+
+    candidate_mask, pruned_items = restrict_candidates_by_budget(
+        candidate_mask, T
+    )
+
+    # 候補項目に必要な前提科目を候補へ追加する
+    # （前提科目制約の前処理その2：候補展開）。
+
+    candidate_mask = add_prerequisites_to_candidates(candidate_mask)
+
+    # OR前提の選択肢として追加された項目の中にも
+    # 予算内で前提を満たせないものがあり得るため、もう一度だけ外す。
+    # （候補に残った子項目には、必ず予算内で選べる選択肢が残る）
+
+    candidate_mask, pruned_or_parents = restrict_candidates_by_budget(
+        candidate_mask, T
+    )
+
+    # 1回目の枝刈りで外れた項目が候補展開で再追加され、
+    # 2回目でまた外れると重複するため、順序を保って一意化する
+    pruned_items = list(dict.fromkeys(pruned_items + pruned_or_parents))
 
     candidate_indices = np.flatnonzero(candidate_mask).tolist()
 
@@ -195,9 +229,21 @@ def recommend(
 
     # 項目の価値を最大化する。
     # QUBOはエネルギー最小化なので、価値を負の線形係数として追加する。
+    #
+    # ただし前提科目を持つ項目の価値は、
+    # 「前提が揃って初めて発生する条件付き価値」として
+    # 8節で二次項として追加するため、ここでは線形項を与えない。
 
     for j in candidate_indices:
-        bqm.add_variable(f"item_{j}", -float(item_value[j]))
+        has_prerequisites = (
+            item_names[j] in and_prerequisites
+            or item_names[j] in or_prerequisites
+        )
+
+        if has_prerequisites:
+            bqm.add_variable(f"item_{j}", 0.0)
+        else:
+            bqm.add_variable(f"item_{j}", -float(item_value[j]))
 
     # ========================================================
     # 5b. シナジー項の追加
@@ -236,12 +282,16 @@ def recommend(
                 synergy_upper_bound += synergy_value
 
     # ========================================================
-    # 6. ペナルティ係数
+    # 6. ペナルティ係数（予算制約専用）
     # ========================================================
 
     # 項目とシナジーをすべて得た場合に得られる報酬の上限。
+    # 前提科目は目的関数で担保しないため、
+    # ペナルティ係数を使う制約は予算制約（7節）だけになった。
     #
     # 前提科目として追加された価値0の項目は報酬に影響しない。
+    # 条件付き価値（8節）で得られる報酬も項目価値V_jを超えないので、
+    # この上限はそのまま使える。
     #
     # シナジー項が加わった分、報酬の上限も引き上げておかないと、
     # 制約を破ってでもシナジーを稼いだ方が得になってしまう。
@@ -312,138 +362,107 @@ def recommend(
     bqm.offset += constraint_penalty * budget_units ** 2
 
     # ========================================================
-    # 8. AND前提科目制約
+    # 8. 前提科目の条件付き価値
     # ========================================================
 
-    # 子項目を選ぶなら親項目も必要：
-    #   child <= parent
+    # 前提科目はハード制約であり、ペナルティ項では担保しない
+    # （担保は前処理＝候補集合の制限と、10節の修復デコードが行う）。
+    # そのため、旧実装にあったAND/ORペナルティ項と
+    # OR用スラック変数（or_slack_*）はQUBOに存在しない。
     #
-    # 違反するのは child = 1, parent = 0 の場合だけ。
+    # その代わり、前提科目を持つ子項目の価値V_childを
+    # 「前提が揃って初めて発生する条件付き価値」の二次項として表現し、
+    # 前提を無視した選択が得にならない方向へアニーリングを誘導する。
+    # 係数はペナルティ係数Aではなく価値Vそのものなので、
+    # エネルギー地形が巨大な制約項に支配されることはない。
     #
-    # QUBOペナルティ：
-    #   A * child * (1 - parent)
+    # AND前提（親p_1..p_nがすべて必要）：
+    #   -V * child * (p_1 + ... + p_n - (n-1))
     #
-    # 展開すると：
-    #   A * child - A * child * parent
+    #   全親を選択 → -V（満額）／親が1つ欠ける → 0（価値なし）
+    #   ／さらに欠ける → 正（予算を消費するだけで損）
+    #
+    # OR前提（親p_1..p_mのどれか1つでよい）：
+    #   -(V/min(m,2)) * child * (p_1 + ... + p_m)
+    #
+    #   選ばれた選択肢の数に比例した価値を与える近似。
+    #   実際の解で選ばれる選択肢は1～2個であることが多いため、
+    #   分母は2で頭打ちにする（選択肢1個で価値の半分、2個で満額）。
+    #   前提充足の担保はデコード側が行うため、
+    #   この近似は解の正しさには影響しない。
+    #
+    # AND・OR両方の前提を持つ項目は、価値を2グループへ均等に分ける。
 
-    for child_name, parent_names in and_prerequisites.items():
-        child = item_index[child_name]
+    for j in candidate_indices:
+        child_name = item_names[j]
 
-        # 子項目が候補外なら制約も不要
-        if not candidate_mask[child]:
+        prerequisite_groups = []
+
+        if child_name in and_prerequisites:
+            prerequisite_groups.append(("AND", and_prerequisites[child_name]))
+
+        if child_name in or_prerequisites:
+            prerequisite_groups.append(("OR", or_prerequisites[child_name]))
+
+        # 前提のない項目の価値は5節で線形項として追加済み
+        if not prerequisite_groups:
             continue
 
-        child_variable = f"item_{child}"
+        child_value = float(item_value[j])
 
-        for parent_name in parent_names:
-            parent = item_index[parent_name]
-
-            if not candidate_mask[parent]:
-                raise RuntimeError(
-                    f"前提科目「{parent_name}」が候補に追加されていません。"
-                )
-
-            parent_variable = f"item_{parent}"
-
-            bqm.add_linear(child_variable, constraint_penalty)
-
-            bqm.add_quadratic(child_variable, parent_variable, -constraint_penalty)
-
-    # ========================================================
-    # 8b. OR前提科目制約（言語必須ルール）
-    # ========================================================
-
-    # 子項目を選ぶなら、選択肢のうち少なくとも1つが必要：
-    #   child <= parent_1 + parent_2 + ... + parent_n
-    #
-    # AND前提（8）とは異なり、右辺が定数ではなく
-    # 複数の変数の合計になるため、予算制約（7）と同じ
-    # 「スラック変数で不等式を等式に変換する」手法を流用する。
-    #
-    # 等式へ変換：
-    #   parent_1 + ... + parent_n - child - s = 0
-    #
-    # sは0～n（選択肢の数）の範囲を取るスラック変数。
-    #
-    # 満たされているとき（child <= sum(parents)）：
-    #   左辺は0以上n以下の値になるので、
-    #   sをちょうどその値に選べば式は0になる。
-    #
-    # 満たされていないとき（child=1, parents全部0）：
-    #   左辺は-1になるが、sは0以上しか取れないため、
-    #   どうやっても式を0にできず、必ずペナルティが発生する。
-    #
-    # QUBOへ追加するペナルティ：
-    #   A * (sum(parents) - child - s)^2
-
-    for child_name, parent_names in or_prerequisites.items():
-        child = item_index[child_name]
-
-        # 子項目が候補外なら制約も不要
-        if not candidate_mask[child]:
+        # 前提科目として追加された価値0の項目は誘導項も不要
+        if child_value == 0.0:
             continue
 
-        child_variable = f"item_{child}"
+        group_value = child_value / len(prerequisite_groups)
 
-        parent_variables = []
+        child_variable = f"item_{j}"
 
-        for parent_name in parent_names:
-            parent = item_index[parent_name]
+        for kind, parent_names in prerequisite_groups:
+            if kind == "AND":
+                # AND前提の親は候補展開で必ず候補に入っている
+                parent_indices = []
 
-            if not candidate_mask[parent]:
-                raise RuntimeError(
-                    f"前提科目「{parent_name}」が候補に追加されていません。"
+                for parent_name in parent_names:
+                    parent = item_index[parent_name]
+
+                    if not candidate_mask[parent]:
+                        raise RuntimeError(
+                            f"前提科目「{parent_name}」が候補に追加されていません。"
+                        )
+
+                    parent_indices.append(parent)
+
+                for parent in parent_indices:
+                    bqm.add_quadratic(
+                        child_variable, f"item_{parent}", -group_value
+                    )
+
+                bqm.add_linear(
+                    child_variable, group_value * (len(parent_indices) - 1)
                 )
 
-            parent_variables.append(f"item_{parent}")
+            else:
+                # OR前提の選択肢は予算枝刈りで候補外になっている場合がある
+                parent_indices = [
+                    item_index[parent_name]
+                    for parent_name in parent_names
+                    if candidate_mask[item_index[parent_name]]
+                ]
 
-        # このOR制約専用のスラック変数を用意する
-        # （budget用のslack_kと名前が衝突しないよう、
-        #   子項目のインデックスを名前に含める）
+                if len(parent_indices) == 0:
+                    raise RuntimeError(
+                        f"「{child_name}」のOR前提の選択肢が候補にありません。"
+                    )
 
-        or_slack_weights = bounded_binary_weights(len(parent_variables))
+                credit_denominator = min(len(parent_indices), 2)
 
-        # 係数：親項目は+1、子項目は-1、スラックは-weight
-        or_terms = {}
-
-        for parent_variable in parent_variables:
-            or_terms[parent_variable] = or_terms.get(parent_variable, 0) + 1
-
-        or_terms[child_variable] = or_terms.get(child_variable, 0) - 1
-
-        for k, weight in enumerate(or_slack_weights):
-            or_slack_variable = f"or_slack_{child}_{k}"
-
-            bqm.add_variable(or_slack_variable, 0.0)
-
-            or_terms[or_slack_variable] = (
-                or_terms.get(or_slack_variable, 0) - weight
-            )
-
-        or_variables = list(or_terms.keys())
-
-        # 二乗ペナルティの線形項（目標値は0）
-        for variable in or_variables:
-            coefficient = or_terms[variable]
-
-            bqm.add_linear(variable, constraint_penalty * coefficient ** 2)
-
-        # 二乗ペナルティの交差項
-        for p in range(len(or_variables)):
-            variable_p = or_variables[p]
-            coefficient_p = or_terms[variable_p]
-
-            for q in range(p + 1, len(or_variables)):
-                variable_q = or_variables[q]
-                coefficient_q = or_terms[variable_q]
-
-                quadratic_bias = (
-                    2 * constraint_penalty * coefficient_p * coefficient_q
-                )
-
-                bqm.add_quadratic(variable_p, variable_q, quadratic_bias)
-
-        # 目標値が0なので、二乗展開の定数項は発生しない
+                for parent in parent_indices:
+                    bqm.add_quadratic(
+                        child_variable,
+                        f"item_{parent}",
+                        -group_value / credit_denominator,
+                    )
 
     # ========================================================
     # 9. アニーリング
@@ -464,66 +483,101 @@ def recommend(
     sampleset = sampler.sample(bqm, **sample_kwargs)
 
     # ========================================================
-    # 10. 実行可能解の抽出
+    # 10. 修復デコードと実行可能解の抽出
     # ========================================================
 
-    best_feasible_z = None
-    best_feasible_energy = np.inf
+    # 各サンプルの選択から、前提を満たさない子項目を取り除く
+    # （前提科目制約の担保その3：修復デコード）。
+    #
+    # 修復後の選択は定義上すべて前提科目制約を満たすため、
+    # 前提違反を理由にサンプルが捨てられることはない。
+    # 修復は項目を取り除くだけで学習時間が増えることもなく、
+    # 残る検査は予算のみになる。
+    #
+    # 順位付けはQUBOエネルギーではなく、修復後の選択の
+    # 真の目的関数値（項目価値＋シナジー）で行う。
+    # エネルギーは修復前のビット列に対応する値であり、
+    # 修復で項目が除かれたサンプルでは実際の価値とずれるため。
+
+    best_z = None
+    best_score = -np.inf
+    best_hours = 0
+    best_energy = np.inf
 
     feasible_count = 0
     budget_violation_count = 0
-    slack_violation_count = 0
-    prerequisite_violation_count = 0
+    prerequisite_repair_count = 0
+
+    # エネルギー分布の可視化用。
+    # 実行可能解と制約違反解を分けて記録しておく。
+    feasible_energies = []
+    infeasible_energies = []
 
     for datum in sampleset.data(fields=["sample", "energy"], sorted_by="energy"):
         sample = datum.sample
 
-        z_candidate = np.zeros(M, dtype=int)
+        z_raw = np.zeros(M, dtype=int)
 
         for j in candidate_indices:
-            z_candidate[j] = int(sample.get(f"item_{j}", 0))
+            z_raw[j] = int(sample.get(f"item_{j}", 0))
 
-        # 選択された学習時間
-        selected_units = int(cost_units @ z_candidate)
+        z_repaired, removed_names = repair_prerequisites(z_raw)
 
-        # サンプル内のスラック値
-        sampled_slack_units = sum(
-            weight * int(sample.get(f"slack_{k}", 0))
-            for k, weight in enumerate(slack_weights)
-        )
+        if removed_names:
+            prerequisite_repair_count += 1
 
-        # 予算以下か
-        budget_ok = selected_units <= budget_units
+        # 予算検査は修復後の選択に対して行う
+        selected_hours = int(hours @ z_repaired)
 
-        # 予算等式が成立しているか
-        slack_ok = selected_units + sampled_slack_units == budget_units
-
-        # 前提科目制約
-        prerequisites_ok, _ = check_prerequisites(z_candidate)
-
-        if not budget_ok:
+        if selected_hours > T:
             budget_violation_count += 1
+            infeasible_energies.append(float(datum.energy))
+            continue
 
-        if not slack_ok:
-            slack_violation_count += 1
+        feasible_count += 1
+        feasible_energies.append(float(datum.energy))
 
-        if not prerequisites_ok:
-            prerequisite_violation_count += 1
+        decoded_selections = [(z_repaired, selected_hours)]
 
-        if budget_ok and slack_ok and prerequisites_ok:
-            feasible_count += 1
+        # 前提が欠けていたサンプルは、子項目を諦める下方修復だけでなく、
+        # 不足親を追加する上方補完も試し、予算内に収まれば候補に加える
+        # （高価値の子項目を捨てずに済む解を拾うため）
+        if removed_names:
+            z_completed, _ = complete_prerequisites(
+                z_raw, item_value, candidate_mask
+            )
 
-            if datum.energy < best_feasible_energy:
-                best_feasible_z = z_candidate.copy()
-                best_feasible_energy = float(datum.energy)
+            if z_completed is not None:
+                completed_hours = int(hours @ z_completed)
 
-    if best_feasible_z is None:
+                if completed_hours <= T:
+                    decoded_selections.append((z_completed, completed_hours))
+
+        for z_decoded, decoded_hours in decoded_selections:
+            # 修復後の真の目的関数値（大きいほど良い）。
+            # item_synergyは対角0の対称行列なので、
+            # 二次形式の半分がペア合計になる。
+            score = float(item_value @ z_decoded) + 0.5 * float(
+                z_decoded @ item_synergy @ z_decoded
+            )
+
+            # 同スコアなら学習時間の短い解を採用する
+            # （価値0の項目だけを追加した冗長な解を除くため）
+            if score > best_score or (
+                score == best_score and decoded_hours < best_hours
+            ):
+                best_z = z_decoded
+                best_score = score
+                best_hours = decoded_hours
+                best_energy = float(datum.energy)
+
+    if best_z is None:
         raise RuntimeError(
-            "予算制約と前提科目制約を満たすサンプルが得られませんでした。\n"
+            "予算制約を満たすサンプルが得られませんでした。\n"
             "num_readsまたはnum_sweepsを増やしてください。"
         )
 
-    z = best_feasible_z
+    z = best_z
 
     # ========================================================
     # 11. 最終検査
@@ -572,6 +626,7 @@ def recommend(
         "item_value": item_value,
         "candidate_mask": candidate_mask,
         "candidate_indices": candidate_indices,
+        "pruned_items": pruned_items,
         "time_unit": time_unit,
         "cost_units": cost_units,
         "budget_units": budget_units,
@@ -580,11 +635,13 @@ def recommend(
         "constraint_penalty": constraint_penalty,
         "synergy_upper_bound": synergy_upper_bound,
         "active_synergies": active_synergies,
-        "energy": best_feasible_energy,
+        "energy": best_energy,
+        "best_score": best_score,
         "feasible_count": feasible_count,
+        "feasible_energies": feasible_energies,
+        "infeasible_energies": infeasible_energies,
         "budget_violation_count": budget_violation_count,
-        "slack_violation_count": slack_violation_count,
-        "prerequisite_violation_count": prerequisite_violation_count,
+        "prerequisite_repair_count": prerequisite_repair_count,
         "bqm": bqm,
         "sampleset": sampleset,
     }
