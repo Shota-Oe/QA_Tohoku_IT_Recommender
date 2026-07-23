@@ -21,18 +21,21 @@ from calculation.recommend import recommend
 from calculation.sampler import BACKENDS, build_sampler, default_num_reads
 from config.parameters import DEFAULT_ANNEALING_TIME, DEFAULT_QPU_SOLVER
 from config.prerequisites import validate_prerequisite_data
-from inputs.user_input import T, hours_per_week, user, weeks
+from inputs.user_input import T, hours_per_week, learned, user, weeks
 from output.report import print_report
 from output.visualize import plot_results
 
 
-def use_utf8_stdout():
+def use_utf8_output():
     """Windowsのコンソール（cp932）でも「↔」「✅」などを表示できるようにする。
 
     argparseのヘルプも日本語を含むため、引数解釈より先に呼ぶ。
+    標準エラー出力も対象にする。予算不足などのエラーメッセージは
+    日本語で「何が足りないか」を説明しており、化けると用をなさないため。
     """
-    if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-        sys.stdout.reconfigure(encoding="utf-8")
+    for stream in (sys.stdout, sys.stderr):
+        if stream.encoding and stream.encoding.lower() != "utf-8":
+            stream.reconfigure(encoding="utf-8")
 
 
 def parse_arguments():
@@ -85,7 +88,7 @@ def parse_arguments():
 
 
 def main():
-    use_utf8_stdout()
+    use_utf8_output()
 
     args = parse_arguments()
 
@@ -111,6 +114,7 @@ def main():
     z, field_score, debug_info = recommend(
         user=user,
         T=T,
+        learned=learned,
         num_reads=num_reads,
         sampler=sampler,
         sampler_kwargs=sampler_kwargs,

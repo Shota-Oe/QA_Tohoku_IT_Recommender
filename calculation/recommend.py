@@ -8,6 +8,8 @@
   ↓
 所属分野の相性を合計して学習項目価値を計算
   ↓
+学習済み科目を候補から除外し、実効前提・実効価値へ畳み込む
+  ↓
 候補集合の生成＋前提科目の前処理
 （予算内で前提を満たせない項目の除外・前提科目の候補追加）
   ↓
@@ -32,6 +34,9 @@ from calculation.prerequisites import (
     add_prerequisites_to_candidates,
     check_prerequisites,
     complete_prerequisites,
+    effective_prerequisites,
+    find_learned_prerequisite_gaps,
+    min_closure_hours,
     repair_prerequisites,
     restrict_candidates_by_budget,
 )
@@ -45,7 +50,6 @@ from config.parameters import (
     DEFAULT_PENALTY_MARGIN,
     DEFAULT_SEED,
 )
-from config.prerequisites import and_prerequisites
 from config.synergy import item_synergy
 
 
@@ -75,6 +79,7 @@ def coefficient_ratio(bqm):
 def recommend(
     user,
     T,
+    learned=(),
     min_relevance=DEFAULT_MIN_RELEVANCE,
     num_reads=DEFAULT_NUM_READS,
     num_sweeps=DEFAULT_NUM_SWEEPS,
@@ -93,6 +98,12 @@ def recommend(
 
     T : int
         使用可能な総学習時間。
+
+    learned : iterable of str
+        すでに学習を終えた項目名。候補から外し、
+        実効前提（親を満たし済みとみなす）と
+        実効価値（シナジーの畳み込み）へ反映する。
+        学習済みの時間はTを消費せず、価値も目的関数に計上しない。
 
     min_relevance : float
         項目価値へ反映させる分野相性の最低値。
@@ -152,6 +163,29 @@ def recommend(
     if not 0.0 <= min_relevance < 1.0:
         raise ValueError("min_relevanceは0以上1未満にしてください。")
 
+    # 学習済み科目。以降はハッシュ可能な集合として扱う
+    # （前提クロージャのキャッシュキーになるため）。
+    learned_names = tuple(learned)
+
+    unknown_learned = [
+        name for name in learned_names if name not in item_index
+    ]
+
+    if unknown_learned:
+        raise ValueError(f"学習済みに未知の項目名があります: {unknown_learned}")
+
+    learned = frozenset(learned_names)
+
+    learned_indices = [item_index[name] for name in learned_names]
+
+    # 学習済み集合そのものの前提不整合（「Unityは学習済みだがC#は未習」など）。
+    # 自己申告を尊重してエラーにも自動補完にもせず、警告として呼び出し側へ返す。
+    learned_gaps = find_learned_prerequisite_gaps(learned_names)
+
+    # 実効前提 P'(c) = P(c) - learned。
+    # 以降の前提に関する処理はすべてこの辞書を見る。
+    effective_prereq = effective_prerequisites(learned)
+
     # ========================================================
     # 1. 各IT分野との相性
     # ========================================================
@@ -203,14 +237,24 @@ def recommend(
 
     # 分野関連度がまったくない項目は候補外。
     #
+    # 学習済みの項目も候補外にする（これが「学習済みを推薦しない」の実体）。
+    # 候補入りの判定に使うのはこの元の価値item_valueであり、
+    # 後述の実効価値effective_valueではない。
+    # 学習済みシナジーのボーナスだけを理由に、
+    # 相性0.60未満の分野の項目が候補へ紛れ込むのを防ぐためである。
+    #
     # さらに、前提クロージャ込みの最小学習時間が予算Tを超える項目は、
     # 「前提を満たしつつ予算内」の解に決して現れないため候補から外す
     # （前提科目制約の前処理その1：候補集合の制限）。
+    # 学習済みの親はクロージャから外れるので、
+    # 学習済みがあるとこの枝刈りを通る項目はむしろ増えることがある。
 
     candidate_mask = item_value > 0.0
 
+    candidate_mask[learned_indices] = False
+
     candidate_mask, pruned_items = restrict_candidates_by_budget(
-        candidate_mask, T
+        candidate_mask, T, learned
     )
 
     # 候補項目に必要な前提科目を候補へ追加する
@@ -222,12 +266,56 @@ def recommend(
     # （OR前提があった頃は、選択肢として追加した項目が
     #   単独では予算に収まらない場合があり、2回目の枝刈りが要った）。
 
-    candidate_mask = add_prerequisites_to_candidates(candidate_mask)
+    candidate_mask = add_prerequisites_to_candidates(candidate_mask, learned)
 
     candidate_indices = np.flatnonzero(candidate_mask).tolist()
 
     if len(candidate_indices) == 0:
-        raise RuntimeError("推薦候補となる学習項目がありません。")
+        # 「予算が足りない」のか「学習済みで尽きた」のかを切り分けられるように、
+        # 予算Tと、前提込みで最も短く学べる項目の時間を添える。
+        remaining = [
+            name
+            for name, j in item_index.items()
+            if item_value[j] > 0.0 and name not in learned
+        ]
+
+        if not remaining:
+            raise RuntimeError(
+                "推薦候補となる学習項目がありません。"
+                f"相性{min_relevance:.2f}以上の分野に属する項目は、すべて学習済みです。"
+            )
+
+        cheapest = min(min_closure_hours(name, learned) for name in remaining)
+
+        raise RuntimeError(
+            "推薦候補となる学習項目がありません。"
+            f"予算{T}hに対し、前提込みで最も短く学べる項目でも{cheapest}h必要です。"
+        )
+
+    # ========================================================
+    # 3b. 学習済みシナジーの畳み込み（実効価値）
+    # ========================================================
+
+    # 学習済みの項目は「z=1に固定してQUBOから消した変数」とみなす。
+    # 二次項 S_ij z_i z_j に z_i=1 を代入すると S_ij z_j、
+    # つまり項目jの線形ボーナスへ落ちる。これを項目価値へ畳み込む。
+    #
+    #   B_j  = Σ_{i∈learned} S_ij     （負にもなりうる）
+    #   V'_j = V_j + B_j
+    #
+    # 正負とも畳み込む。負のシナジー（Unity×Unreal Engineなど）は
+    # 「同時に学ぶと非効率」であると同時に「重複スキルの冗長性」でもあり、
+    # 既習との関係でも成立するとみなす。
+    #
+    # 以降、QUBOの係数と目的関数値にはこの実効価値を使う。
+    # 候補入りの判定だけは元のitem_valueで済ませてある（3節）。
+
+    if learned_indices:
+        learned_synergy = item_synergy[learned_indices].sum(axis=0)
+    else:
+        learned_synergy = np.zeros(M, dtype=float)
+
+    effective_value = item_value + learned_synergy
 
     # ========================================================
     # 4. 時間を最大公約数で圧縮
@@ -262,12 +350,16 @@ def recommend(
     # ただし前提科目を持つ項目の価値は、
     # 「前提が揃って初めて発生する条件付き価値」として
     # 8節で二次項として追加するため、ここでは線形項を与えない。
+    #
+    # 前提を持つかどうかは実効前提P'で判定する。
+    # 親がすべて学習済みになった項目は「前提のない項目」に戻り、
+    # 価値は条件付きではなく線形項として入る。
 
     for j in candidate_indices:
-        if item_names[j] in and_prerequisites:
+        if effective_prereq.get(item_names[j]):
             bqm.add_variable(f"item_{j}", 0.0)
         else:
-            bqm.add_variable(f"item_{j}", -float(item_value[j]))
+            bqm.add_variable(f"item_{j}", -float(effective_value[j]))
 
     # ========================================================
     # 5b. シナジー項の追加
@@ -360,8 +452,13 @@ def recommend(
                 positive_synergy_per_item[i] += float(synergy_value)
                 positive_synergy_per_item[j] += float(synergy_value)
 
+    # 価値の側は実効価値V'を使う。学習済みシナジーB_jは
+    # 「項目jを1つ追加したときに解放される報酬」に含まれるので、
+    # V_jのままだとAが過小になり、1単位違反の解が実行可能解に勝ちうる。
+    # 内側の和は候補内のペアのみ（学習済みとの分はV'側に入っており、二重計上しない）。
+
     marginal_contribution = max(
-        max(0.0, float(item_value[j])) + positive_synergy_per_item[j]
+        max(0.0, float(effective_value[j])) + positive_synergy_per_item[j]
         for j in candidate_indices
     )
 
@@ -369,7 +466,7 @@ def recommend(
     constraint_penalty = marginal_contribution * (1.0 + penalty_margin)
 
     reward_upper_bound = (
-        sum(max(0.0, float(item_value[j])) for j in candidate_indices)
+        sum(max(0.0, float(effective_value[j])) for j in candidate_indices)
         + synergy_upper_bound
     )
 
@@ -458,11 +555,15 @@ def recommend(
     for j in candidate_indices:
         child_name = item_names[j]
 
-        # 前提のない項目の価値は5節で線形項として追加済み
-        if child_name not in and_prerequisites:
+        # 前提のない項目（親がすべて学習済みになった項目を含む）の価値は
+        # 5節で線形項として追加済み
+        if not effective_prereq.get(child_name):
             continue
 
-        child_value = float(item_value[j])
+        # 学習済みシナジーB_cも条件付き価値の側に含める（V'ごと二次項にする）。
+        # B_cだけを無条件の線形項にすると、前提を満たさないまま子を立てても
+        # ボーナスだけ得られる形になり、探索の誘導が濁るためである。
+        child_value = float(effective_value[j])
 
         # 前提科目として追加された価値0の項目は誘導項も不要
         if child_value == 0.0:
@@ -473,7 +574,7 @@ def recommend(
         # 前提科目は候補展開で必ず候補に入っている
         parent_indices = []
 
-        for parent_name in and_prerequisites[child_name]:
+        for parent_name in effective_prereq[child_name]:
             parent = item_index[parent_name]
 
             if not candidate_mask[parent]:
@@ -549,7 +650,7 @@ def recommend(
         for j in candidate_indices:
             z_raw[j] = int(sample.get(f"item_{j}", 0))
 
-        z_repaired, removed_names = repair_prerequisites(z_raw)
+        z_repaired, removed_names = repair_prerequisites(z_raw, learned)
 
         if removed_names:
             prerequisite_repair_count += 1
@@ -571,7 +672,9 @@ def recommend(
         # 不足親を追加する上方補完も試し、予算内に収まれば候補に加える
         # （高価値の子項目を捨てずに済む解を拾うため）
         if removed_names:
-            z_completed, _ = complete_prerequisites(z_raw, candidate_mask)
+            z_completed, _ = complete_prerequisites(
+                z_raw, candidate_mask, learned
+            )
 
             if z_completed is not None:
                 completed_hours = int(hours @ z_completed)
@@ -581,9 +684,10 @@ def recommend(
 
         for z_decoded, decoded_hours in decoded_selections:
             # 修復後の真の目的関数値（大きいほど良い）。
+            # 学習済みシナジーを畳み込んだ実効価値で測る。
             # item_synergyは対角0の対称行列なので、
             # 二次形式の半分がペア合計になる。
-            score = float(item_value @ z_decoded) + 0.5 * float(
+            score = float(effective_value @ z_decoded) + 0.5 * float(
                 z_decoded @ item_synergy @ z_decoded
             )
 
@@ -611,7 +715,7 @@ def recommend(
 
     total_hours = int(hours @ z)
 
-    prerequisites_ok, violations = check_prerequisites(z)
+    prerequisites_ok, violations = check_prerequisites(z, learned)
 
     if total_hours > T:
         raise RuntimeError(f"予算制約違反：{total_hours}h > {T}h")
@@ -646,10 +750,36 @@ def recommend(
                     (item_names[i], item_names[j], float(synergy_value))
                 )
 
+    # 学習済みと選択項目のあいだで発生したシナジー。
+    # 実効価値へ畳み込んで表に出なくなった分を、結果表示で説明するために残す。
+    learned_synergies = []
+
+    for name in learned_names:
+        i = item_index[name]
+
+        for j in candidate_indices:
+            if z[j] != 1:
+                continue
+
+            synergy_value = item_synergy[i, j]
+
+            if synergy_value != 0.0:
+                learned_synergies.append(
+                    (name, item_names[j], float(synergy_value))
+                )
+
     debug_info = {
         "field_score": field_score,
         "field_relevance": field_relevance,
         "item_value": item_value,
+        "effective_value": effective_value,
+        "learned": learned_names,
+        "learned_indices": learned_indices,
+        "learned_hours": int(sum(hours[j] for j in learned_indices)),
+        "learned_gaps": learned_gaps,
+        "learned_synergy": learned_synergy,
+        "learned_synergies": learned_synergies,
+        "effective_prerequisites": effective_prereq,
         "candidate_mask": candidate_mask,
         "candidate_indices": candidate_indices,
         "pruned_items": pruned_items,

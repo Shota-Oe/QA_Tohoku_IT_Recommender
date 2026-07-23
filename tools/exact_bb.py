@@ -23,15 +23,18 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 import numpy as np
 
-from calculation.prerequisites import check_prerequisites
+from calculation.prerequisites import check_prerequisites, effective_prerequisites
 from calculation.recommend import recommend
 from config.items import M, hours, item_index, item_names
-from config.prerequisites import and_prerequisites
 from config.synergy import synergy_pairs
-from inputs.user_input import T, user
+from inputs.user_input import T, learned, user
 
-z_anneal, _, dbg = recommend(user=user, T=T)
-V = dbg["item_value"]
+z_anneal, _, dbg = recommend(user=user, T=T, learned=learned)
+
+# 学習済みがある場合、本体は実効前提P'と実効価値V'（既習シナジー込み）で解く。
+# 同じ土俵で比較するため、厳密解も同じ前提・同じ価値で求める。
+V = dbg["effective_value"]
+and_prerequisites = effective_prerequisites(frozenset(learned))
 cand = sorted(dbg["candidate_indices"])
 n = len(cand)
 pos = {j: k for k, j in enumerate(cand)}
@@ -110,7 +113,7 @@ report("アニーリング解      ", anneal)
 
 # プロジェクト本体の検査関数で最適解の実行可能性を独立に確認する
 z_opt = np.array([1 if i in opt else 0 for i in range(M)])
-ok, viol = check_prerequisites(z_opt)
+ok, viol = check_prerequisites(z_opt, frozenset(learned))
 print(f"\n[検証] 最適解の前提充足={ok} {viol if not ok else ''} / "
       f"予算 {int(hours @ z_opt)}h <= {T}h : {int(hours @ z_opt) <= T}")
 
