@@ -21,7 +21,7 @@ from calculation.recommend import recommend
 from calculation.sampler import BACKENDS, build_sampler, default_num_reads
 from config.parameters import DEFAULT_ANNEALING_TIME, DEFAULT_QPU_SOLVER
 from config.prerequisites import validate_prerequisite_data
-from inputs.user_input import T, hours_per_week, learned, user, weeks
+from inputs.user_input import T, hours_per_week, interests, learned, user, weeks
 from output.report import print_report
 from output.visualize import plot_results
 
@@ -129,6 +129,7 @@ def main():
         z=z,
         field_score=field_score,
         debug_info=debug_info,
+        interests=interests,
         backend_description=backend_description,
     )
 

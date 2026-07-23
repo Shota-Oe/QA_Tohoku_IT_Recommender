@@ -1,8 +1,8 @@
 """推薦結果の整理とテキスト表示。"""
 
-from config.fields import field_names
+from config.fields import field_index, field_names
 from config.items import M, hours, item_fields, item_index, item_names
-from config.parameters import axis_names
+from config.parameters import DEFAULT_MIN_RELEVANCE, axis_names
 from config.prerequisites import and_prerequisites
 
 
@@ -117,6 +117,29 @@ def print_learned(debug_info):
         )
 
 
+def print_interests(interests, field_score, debug_info):
+    """アンケートで申告された興味のある分野を表示する。
+
+    興味は推薦計算には使っていない（分野は適性5軸からの相性だけで決まる）。
+    自己申告と相性が食い違う回答が実際にあるため、相性と閾値の判定を併記して
+    「申告した分野が推薦に効いているのか」を読み取れるようにする。
+    """
+    if not interests:
+        return
+
+    print(f"\n【興味のある分野】{len(interests)}件（自己申告・推薦計算には未使用）")
+
+    for name in interests:
+        field = field_index[name]
+
+        if debug_info["field_relevance"][field] > 0.0:
+            status = "推薦計算に使用"
+        else:
+            status = f"相性{DEFAULT_MIN_RELEVANCE:.2f}未満のため除外"
+
+        print(f"  ・{name}（適性からの相性 {field_score[field]:.3f}：{status}）")
+
+
 def print_solver_info(debug_info, backend_description):
     """アニーリング実行基盤の情報を表示する。
 
@@ -168,6 +191,7 @@ def print_report(
     z,
     field_score,
     debug_info,
+    interests=(),
     backend_description="neal（シミュレーテッド・アニーリング／ローカル）",
 ):
     """推薦結果を標準出力へ表示する。"""
@@ -188,6 +212,8 @@ def print_report(
     for axis_name, value in zip(axis_names, user):
         print(f"  {axis_name}: {value:.1f}")
 
+    print_interests(interests, field_score, debug_info)
+
     print(f"\n【学習時間】週{hours_per_week}h × {weeks}週 = {T}h")
 
     print_learned(debug_info)
@@ -198,7 +224,7 @@ def print_report(
         if relevance > 0.0:
             status = f"推薦計算に使用：{relevance:.3f}"
         else:
-            status = "相性0.60未満のため除外"
+            status = f"相性{DEFAULT_MIN_RELEVANCE:.2f}未満のため除外"
 
         print(f"  {field_name}: 相性 {score:.3f}｜{status}")
 
