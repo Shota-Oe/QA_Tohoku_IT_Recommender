@@ -18,6 +18,12 @@ def summarize_selection(z, debug_info):
     """選択された項目を表示用の辞書リストへ整理する。"""
     selected = []
 
+    learned = set(debug_info["learned"])
+
+    # 前提の表示は実効前提を見る
+    # （学習済みで満たされた親は「必要とした項目」に数えない）。
+    effective_prereq = debug_info["effective_prerequisites"]
+
     for j in range(M):
         if z[j] != 1:
             continue
@@ -33,9 +39,16 @@ def summarize_selection(z, debug_info):
         # この項目を必要とする上位項目
         required_by = [
             child_name
-            for child_name, parent_names in and_prerequisites.items()
+            for child_name, parent_names in effective_prereq.items()
             if item_names[j] in parent_names
             and z[item_index[child_name]] == 1
+        ]
+
+        # この項目の前提のうち、学習済みで満たされているもの
+        learned_parents = [
+            parent_name
+            for parent_name in and_prerequisites.get(item_names[j], [])
+            if parent_name in learned
         ]
 
         # この項目に関わっているシナジー（選ばれた相手のみ）
@@ -46,15 +59,25 @@ def summarize_selection(z, debug_info):
             if item_names[j] in (name_a, name_b)
         ]
 
+        # 学習済みとのシナジー（実効価値へ畳み込まれている分）
+        learned_synergies = [
+            (learned_name, value)
+            for learned_name, item_name, value in debug_info["learned_synergies"]
+            if item_name == item_names[j]
+        ]
+
         selected.append({
             "index": j,
             "name": item_names[j],
             "hours": int(hours[j]),
-            "value": float(debug_info["item_value"][j]),
+            "value": float(debug_info["effective_value"][j]),
+            "field_value": float(debug_info["item_value"][j]),
             "related_fields": related_fields,
             "effective_fields": effective_fields,
             "required_by": required_by,
+            "learned_parents": learned_parents,
             "synergies": synergies,
+            "learned_synergies": learned_synergies,
         })
 
     # 項目価値の高い順、同価値なら学習時間の短い順
@@ -65,7 +88,88 @@ def summarize_selection(z, debug_info):
     return selected
 
 
-def print_report(user, hours_per_week, weeks, T, z, field_score, debug_info):
+def print_learned(debug_info):
+    """学習済み科目（前処理で候補から外した項目）を表示する。
+
+    学習済みの時間は予算Tを消費しない（過去に消費済みの時間）ので、
+    合計時間は「今回の学習計画から外れた分」の目安として出す。
+    """
+    learned_names = debug_info["learned"]
+
+    if not learned_names:
+        return
+
+    print(
+        f"\n【学習済み（前処理で候補から除外）】{len(learned_names)}件"
+        f"・計{debug_info['learned_hours']}h"
+    )
+
+    for name in learned_names:
+        print(f"  ✔ {name}（{hours[item_index[name]]}h）")
+
+    # 学習済み集合そのものが前提を満たしていない場合の警告。
+    # 自己申告を尊重し、未習の前提項目は候補に残したまま続行している。
+    for child_name, parent_name in debug_info["learned_gaps"]:
+        print(
+            f"  ⚠ 「{child_name}」は学習済みですが、"
+            f"前提の「{parent_name}」は未習です"
+            "（自己申告のまま扱い、前提項目は候補に残しています）"
+        )
+
+
+def print_solver_info(debug_info, backend_description):
+    """アニーリング実行基盤の情報を表示する。
+
+    実機QPUのときは、マイナー埋め込みの規模・鎖切れ率・QPU時間という
+    「実機でしか出てこない指標」を併せて出す。
+    """
+    solver_info = debug_info.get("solver_info") or {}
+
+    print(f"\n【アニーリング実行基盤】{backend_description}")
+
+    print(
+        f"【QUBO規模】{debug_info['bqm'].num_variables}変数／"
+        f"二次項{debug_info['bqm'].num_interactions}"
+        f"｜係数のダイナミックレンジ {debug_info['coefficient_ratio']:.0f}倍"
+    )
+
+    if not solver_info:
+        return
+
+    if "physical_qubits" in solver_info:
+        print(
+            f"【マイナー埋め込み】物理量子ビット{solver_info['physical_qubits']}個"
+            f"（鎖長 平均{solver_info['mean_chain_length']:.1f}／"
+            f"最大{solver_info['max_chain_length']}）"
+        )
+
+    if "chain_break_mean" in solver_info:
+        print(
+            f"【鎖切れ率】平均{solver_info['chain_break_mean']:.3f}／"
+            f"最大{solver_info['chain_break_max']:.3f}"
+            f"｜鎖切れなしのサンプル {solver_info['chain_break_free_ratio']:.1%}"
+        )
+
+    if "qpu_access_time" in solver_info:
+        print(
+            f"【QPUアクセス時間】{solver_info['qpu_access_time'] / 1000:.1f}ms"
+            f"（うちアニール {solver_info['qpu_anneal_time_per_sample']:.0f}µs/サンプル）"
+        )
+
+    if "problem_id" in solver_info:
+        print(f"【問題ID】{solver_info['problem_id']}")
+
+
+def print_report(
+    user,
+    hours_per_week,
+    weeks,
+    T,
+    z,
+    field_score,
+    debug_info,
+    backend_description="neal（シミュレーテッド・アニーリング／ローカル）",
+):
     """推薦結果を標準出力へ表示する。"""
     selected = summarize_selection(z, debug_info)
 
@@ -86,6 +190,8 @@ def print_report(user, hours_per_week, weeks, T, z, field_score, debug_info):
 
     print(f"\n【学習時間】週{hours_per_week}h × {weeks}週 = {T}h")
 
+    print_learned(debug_info)
+
     print("\n【各IT分野との相性】")
 
     for field_name, score, relevance in sorted_fields:
@@ -105,7 +211,17 @@ def print_report(user, hours_per_week, weeks, T, z, field_score, debug_info):
         for item in selected:
             print(f"\n  ✅ {item['name']}（{item['hours']}h）")
 
-            print(f"     項目価値: {item['value']:.3f}")
+            if item["learned_synergies"]:
+                learned_bonus = sum(
+                    value for _, value in item["learned_synergies"]
+                )
+                print(
+                    f"     項目価値: {item['value']:.3f}"
+                    f"（分野価値 {item['field_value']:.3f}"
+                    f" ＋ 既習シナジー {learned_bonus:+.3f}）"
+                )
+            else:
+                print(f"     項目価値: {item['value']:.3f}")
 
             if item["effective_fields"]:
                 print(
@@ -121,12 +237,25 @@ def print_report(user, hours_per_week, weeks, T, z, field_score, debug_info):
                     + ", ".join(item["required_by"])
                 )
 
+            if item["learned_parents"]:
+                print(
+                    "     学習済みで満たした前提: "
+                    + ", ".join(item["learned_parents"])
+                )
+
             if item["synergies"]:
                 synergy_text = ", ".join(
                     f"{partner}({value:+.2f})"
                     for partner, value in item["synergies"]
                 )
                 print("     シナジー: " + synergy_text)
+
+            if item["learned_synergies"]:
+                learned_synergy_text = ", ".join(
+                    f"{partner}({value:+.2f})"
+                    for partner, value in item["learned_synergies"]
+                )
+                print("     既習シナジー: " + learned_synergy_text)
 
     print(f"\n【合計学習時間】{total_hours}h / {T}h")
 
@@ -139,7 +268,10 @@ def print_report(user, hours_per_week, weeks, T, z, field_score, debug_info):
         f"（うちシナジー上限：{debug_info['synergy_upper_bound']:.3f}）"
     )
 
-    print(f"【制約ペナルティ係数】{debug_info['constraint_penalty']:.3f}")
+    print(
+        f"【予算ペナルティ係数】{debug_info['constraint_penalty']:.3f}"
+        f"（基準＝単一項目の限界寄与 {debug_info['marginal_contribution']:.3f}）"
+    )
 
     if debug_info["pruned_items"]:
         print(
@@ -161,5 +293,7 @@ def print_report(user, hours_per_week, weeks, T, z, field_score, debug_info):
     print(f"【採用解の目的関数値（価値＋シナジー）】{debug_info['best_score']:.3f}")
 
     print(f"【採用解のQUBOエネルギー】{debug_info['energy']:.3f}")
+
+    print_solver_info(debug_info, backend_description)
 
     print("=" * 76)

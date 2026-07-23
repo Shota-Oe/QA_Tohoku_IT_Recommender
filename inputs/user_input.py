@@ -1,4 +1,4 @@
-"""ユーザー入力（適性5軸ベクトルと学習時間）。
+"""ユーザー入力（適性5軸ベクトル・学習時間・学習済み科目）。
 
 適性値と学習時間は ``inputs/data/user_input.csv`` から読み込む。
 条件を変えたいときは Python を編集せず CSV を編集すればよい。
@@ -13,9 +13,14 @@ CSV は ``key,value`` 形式：
     計画性・正確さ,1.0
     hours_per_week,30
     weeks,24
+    learned,"HTML/CSS, Python基礎"
 
 適性値は 0.0～1.0 の数値、または HIGH / MID / LOW で指定できる。
 「#」で始まる行と空行は無視される。
+
+``learned`` はすでに学習を終えた科目で、省略できる（キーなし・空値＝学習済みなし）。
+カンマ区切りで並べ、CSVの仕様上ダブルクォートで囲む。
+ここに挙げた項目は前処理で候補から外れる（docs/requirements.md 第10節）。
 
 環境変数 ``USER_INPUT_CSV`` で読み込む CSV のパスを差し替えられる。
 """
@@ -25,6 +30,7 @@ import os
 
 import numpy as np
 
+from config.items import item_index
 from config.parameters import HIGH, LOW, MID, axis_names
 
 # デフォルトの CSV パス（inputs/data/user_input.csv）
@@ -37,6 +43,42 @@ LABEL_TO_VALUE = {"HIGH": HIGH, "MID": MID, "LOW": LOW}
 
 # 学習時間の必須キー
 TIME_KEYS = ["hours_per_week", "weeks"]
+
+# 学習済み科目のキー（省略可）
+LEARNED_KEY = "learned"
+
+
+def _parse_learned(raw, csv_path):
+    """学習済み科目（カンマ区切り）を項目名のタプルへ変換する。
+
+    前後の空白は落とし、空要素は無視し、重複は1つに畳む。
+    表記ゆれを黙って捨てると「除外したつもりが除外されていない」事故になるため、
+    config/items.py に無い項目名はエラーにする。
+    """
+    names = []
+
+    for part in raw.split(","):
+        name = part.strip()
+
+        # 空要素（末尾のカンマなど）は無視する
+        if not name:
+            continue
+
+        # 重複は1つに畳む
+        if name in names:
+            continue
+
+        names.append(name)
+
+    unknown = [name for name in names if name not in item_index]
+
+    if unknown:
+        raise ValueError(
+            f"学習済み科目に未知の項目名があります: {unknown}（{csv_path}）\n"
+            "config/items.py の項目名と一致させてください。"
+        )
+
+    return tuple(names)
 
 
 def _parse_aptitude(raw):
@@ -108,6 +150,8 @@ def load_user_input(csv_path=None):
         学習週数。
     T : int
         総学習時間（hours_per_week × weeks）。
+    learned : tuple of str
+        学習済み科目の項目名（CSVに書かれた順）。指定がなければ空タプル。
     """
     if csv_path is None:
         csv_path = os.environ.get("USER_INPUT_CSV", DEFAULT_CSV_PATH)
@@ -124,7 +168,12 @@ def load_user_input(csv_path=None):
     if missing:
         raise ValueError(f"CSV に必要なキーがありません: {missing}（{csv_path}）")
 
-    unknown = [key for key in values if key not in required]
+    # learned は省略可能なキー
+    optional = [LEARNED_KEY]
+
+    unknown = [
+        key for key in values if key not in required and key not in optional
+    ]
     if unknown:
         raise ValueError(f"CSV に未知のキーがあります: {unknown}（{csv_path}）")
 
@@ -149,9 +198,12 @@ def load_user_input(csv_path=None):
 
     T = hours_per_week * weeks
 
-    return user, hours_per_week, weeks, T
+    # 学習済み科目（省略可）
+    learned = _parse_learned(values.get(LEARNED_KEY, ""), csv_path)
+
+    return user, hours_per_week, weeks, T, learned
 
 
 # モジュール読み込み時にデフォルト CSV から値を読み込む。
-# main.py は user, hours_per_week, weeks, T をそのまま利用する。
-user, hours_per_week, weeks, T = load_user_input()
+# main.py は user, hours_per_week, weeks, T, learned をそのまま利用する。
+user, hours_per_week, weeks, T, learned = load_user_input()

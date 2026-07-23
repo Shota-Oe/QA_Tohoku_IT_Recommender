@@ -9,18 +9,31 @@ and_prerequisites：
         Reactを選ぶ → JavaScript/TSも必要
         機械学習を選ぶ → Python基礎と統計・数学がともに必要
 
-or_prerequisites：
-    子項目を選択する場合、リスト内の前提科目のうち
-    「少なくとも1つ」を選択する必要がある。
+前提科目はAND（全親必須）の一種類だけであり、
+「選択肢のうちいずれか1つ」を要求するOR前提は廃止した。
 
-    child <= sum(parents)
+OR前提は「Gitを選ぶなら何か言語を1つ以上やっていること」のような
+弱い依存を表していたが、
+    - 必須性が低く、本来はシナジー（同時に選ぶと得）で表すべき関係だった
+    - 条件付き価値の分母 min(m, 2) が近似でしかなく、探索の誘導が偏っていた
+    - 予算枝刈り・修復デコードの分岐の大半がOR側の処理だった
+ため、制約からは外している。廃止したOR関係は以下。
 
-    例：
-        モバイルUIを選ぶ → Swift/KotlinかFlutter/RNのどちらかが必要
-        Gitを選ぶ → フロントエンド・バックエンド・モバイル・QAのいずれかの
-                    言語を1つ以上選んでいる必要がある
-                    （Gitは複数分野にまたがる汎用ツールのため、
-                      特定の1分野の言語だけに縛らない）
+    SQL/データベース   ← バックエンド言語 / Python基礎
+    アルゴリズム       ← バックエンド言語 / Python基礎 / C# / C++
+    モバイルUI         ← Swift/Kotlin / Flutter/RN
+    アプリ設計         ← Swift/Kotlin / Flutter/RN
+    ゲーム数学・物理   ← C# / C++          （AND前提「アルゴリズム」は残る）
+    3Dグラフィックス   ← C# / C++          （AND前提「ゲーム数学・物理」を後から追加）
+    Git                ← JavaScript/TS / バックエンド言語 / Swift/Kotlin
+                          / Flutter/RN / Python基礎
+                                             （AND前提「開発環境/ターミナル」を後から追加）
+    開発環境/ターミナル ← JavaScript/TS / バックエンド言語 / Swift/Kotlin
+                          / Flutter/RN
+
+3DグラフィックスとGitは、廃止したOR前提とは別の「親が一意に定まる依存」を
+AND前提として持たせている。「言語のうちいずれか」はANDにできないが、
+「ゲーム数学・物理」「開発環境/ターミナル」なら選択の余地がないためである。
 """
 
 from config.items import item_index
@@ -46,57 +59,63 @@ and_prerequisites = {
     "Firebase/Supabase": ["バックエンド言語"],
     "統計・数学": ["Python基礎"],
     "テスト技法(JSTQB)": ["Python基礎"],
-    "テスト自動化": ["Python基礎"],
-}
+    "テスト自動化": ["Python基礎", "テスト技法(JSTQB)"],
 
-or_prerequisites = {
-    "SQL/データベース": ["バックエンド言語", "Python基礎"],
-    "アルゴリズム": ["バックエンド言語", "Python基礎", "C#", "C++"],
-    "モバイルUI": ["Swift/Kotlin", "Flutter/RN"],
-    "アプリ設計": ["Swift/Kotlin", "Flutter/RN"],
-    "ゲーム数学・物理": ["C#", "C++"],
-    "3Dグラフィックス": ["C#", "C++"],
-    "Git": [
-        "JavaScript/TS",
-        "バックエンド言語",
-        "Swift/Kotlin",
-        "Flutter/RN",
-        "Python基礎",
-    ],
-    "開発環境/ターミナル": [
-        "JavaScript/TS",
-        "バックエンド言語",
-        "Swift/Kotlin",
-        "Flutter/RN",
-    ],
+    # ------------------------------------------------------
+    # 必須性の高い依存の追加：
+    # 親が一意に定まる（＝ANDとして書ける）ものだけを入れる。
+    # 「言語のうちいずれか」のように親が選択制の依存は
+    # ANDにすると誤った制約になるため、ここには含めない。
+    # ------------------------------------------------------
+    "WordPress": ["HTML/CSS"],
+    "SEO/サイト運営": ["HTML/CSS"],
+    "画像編集": ["デザインツール(PS/AI)"],
+    "3Dグラフィックス": ["ゲーム数学・物理"],
+    "Git": ["開発環境/ターミナル"],
 }
 
 
 def validate_prerequisite_data():
     """
-    前提科目（AND・OR両方）に記載された項目が
-    items_data内に存在するか確認する。
+    前提科目に記載された項目がitems_data内に存在するか、
+    また前提関係に循環がないかを確認する。
     """
     errors = []
 
-    for label, prerequisite_dict in (
-        ("AND", and_prerequisites),
-        ("OR", or_prerequisites),
-    ):
-        for child_name, parent_names in prerequisite_dict.items():
-            if child_name not in item_index:
-                errors.append(f"[{label}] 子項目が存在しません: {child_name}")
+    for child_name, parent_names in and_prerequisites.items():
+        if child_name not in item_index:
+            errors.append(f"[AND] 子項目が存在しません: {child_name}")
 
-            for parent_name in parent_names:
-                if parent_name not in item_index:
-                    errors.append(
-                        f"[{label}] 前提項目が存在しません: {parent_name}"
-                    )
+        for parent_name in parent_names:
+            if parent_name not in item_index:
+                errors.append(f"[AND] 前提項目が存在しません: {parent_name}")
 
-            # OR前提は「選択肢がゼロ」だと
-            # 絶対に満たせない制約になってしまうため検査する
-            if label == "OR" and len(parent_names) == 0:
-                errors.append(f"[OR] 選択肢が0個です: {child_name}")
+    # 循環があると前提クロージャの計算が停止しない。
+    # 項目名が未定義の場合はここまでにエラーが出ているので、
+    # 存在する項目だけを辿って検査する。
+    visiting = set()
+    visited = set()
+
+    def find_cycle(name):
+        if name in visited:
+            return
+
+        if name in visiting:
+            errors.append(f"[AND] 前提関係が循環しています: {name}")
+            return
+
+        visiting.add(name)
+
+        for parent_name in and_prerequisites.get(name, []):
+            if parent_name in item_index:
+                find_cycle(parent_name)
+
+        visiting.discard(name)
+        visited.add(name)
+
+    for child_name in and_prerequisites:
+        if child_name in item_index:
+            find_cycle(child_name)
 
     if errors:
         raise ValueError("\n".join(errors))

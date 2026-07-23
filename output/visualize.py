@@ -52,15 +52,21 @@ def plot_results(z, T, field_score, debug_info):
     # 2. 学習項目の価値
     # --------------------------------------------------------
 
+    # 学習済みの項目は候補に入っていないので、そもそも棒として現れない。
+    # 棒の長さは実効価値（分野価値＋既習シナジー）で、レポートの
+    # 「項目価値」と同じ値になる。
+
     candidate_indices = debug_info["candidate_indices"]
+
+    effective_value = debug_info["effective_value"]
 
     item_order = sorted(
         candidate_indices,
-        key=lambda j: (-debug_info["item_value"][j], hours[j]),
+        key=lambda j: (-effective_value[j], hours[j]),
     )
 
     plot_item_names = [item_names[j] for j in item_order]
-    plot_item_values = [debug_info["item_value"][j] for j in item_order]
+    plot_item_values = [effective_value[j] for j in item_order]
 
     plot_item_colors = [
         "salmon" if z[j] == 1 else "lightgray"
@@ -69,8 +75,15 @@ def plot_results(z, T, field_score, debug_info):
 
     axes[1].barh(plot_item_names, plot_item_values, color=plot_item_colors)
 
-    axes[1].set_title(f"学習項目の価値\n赤＝選定、使用{total_hours}h／予算{T}h")
-    axes[1].set_xlabel("所属分野の有効相性の合計")
+    learned_note = ""
+
+    if debug_info["learned"]:
+        learned_note = f"、学習済み{len(debug_info['learned'])}件は候補外"
+
+    axes[1].set_title(
+        f"学習項目の価値\n赤＝選定、使用{total_hours}h／予算{T}h{learned_note}"
+    )
+    axes[1].set_xlabel("所属分野の有効相性の合計（＋既習シナジー）")
     axes[1].invert_yaxis()
 
     # --------------------------------------------------------
