@@ -6,19 +6,18 @@
 
 import numpy as np
 
-from config.parameters import HIGH, LOW, MID
 
 field_profile = {
-    "UI/UXデザイン":        [HIGH, MID, 1.0, LOW, MID],
-    "グラフィックデザイン":  [HIGH, LOW, 1.0, LOW, LOW],
-    "Webサイト管理":         [MID, LOW, 0.0, LOW, HIGH],
-    "フロントエンド":        [MID, MID, 1.0, LOW, MID],
-    "バックエンド":          [LOW, HIGH, 1.0, MID, HIGH],
-    "モバイルアプリ":        [MID, MID, 1.0, LOW, MID],
-    "ゲーム開発":            [HIGH, MID, 1.0, HIGH, LOW],
-    "データ/ML":             [LOW, HIGH, 0.5, HIGH, MID],
-    "インフラ/クラウド":     [LOW, MID, 0.0, MID, HIGH],
-    "QA・テスト":            [LOW, MID, 0.0, LOW, HIGH],
+    "UI/UXデザイン":        [1.0, 0.4, 1.0, 0.0, 0.7],
+    "グラフィックデザイン":  [1.0, 0.2, 1.0, 0.0, 0.2],
+    "Webサイト管理":         [0.3, 0.6, 0.0, 0.2, 1.0],
+    "フロントエンド":        [0.6, 0.7, 0.7, 0.1, 0.7],
+    "バックエンド":          [0.2, 1.0, 0.4, 1.0, 1.0],
+    "モバイルアプリ":        [0.3, 0.7, 0.7, 0.6, 0.7],
+    "ゲーム開発":            [1.0, 0.8, 0.8, 0.6, 0.2],
+    "データ/ML":             [0.4, 1.0, 0.5, 1.0, 0.9],
+    "インフラ/クラウド":     [0.2, 1.0, 0.0, 0.8, 1.0],
+    "QA・テスト":            [0.1, 0.7, 0.0, 0.3, 1.0],
 }
 
 field_names = list(field_profile.keys())

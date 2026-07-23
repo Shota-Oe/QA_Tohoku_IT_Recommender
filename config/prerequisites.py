@@ -19,16 +19,16 @@ OR前提は「Gitを選ぶなら何か言語を1つ以上やっていること�
     - 予算枝刈り・修復デコードの分岐の大半がOR側の処理だった
 ため、制約からは外している。廃止したOR関係は以下。
 
-    SQL/データベース   ← バックエンド言語 / Python基礎
-    アルゴリズム       ← バックエンド言語 / Python基礎 / C# / C++
+    SQL/データベース   ← バックエンド向け言語 / Python基礎
+    アルゴリズム       ← バックエンド向け言語 / Python基礎 / C# / C++
     モバイルUI         ← Swift/Kotlin / Flutter/RN
     アプリ設計         ← Swift/Kotlin / Flutter/RN
     ゲーム数学・物理   ← C# / C++          （AND前提「アルゴリズム」は残る）
     3Dグラフィックス   ← C# / C++          （AND前提「ゲーム数学・物理」を後から追加）
-    Git                ← JavaScript/TS / バックエンド言語 / Swift/Kotlin
+    Git                ← JavaScript/TS / バックエンド向け言語 / Swift/Kotlin
                           / Flutter/RN / Python基礎
                                              （AND前提「開発環境/ターミナル」を後から追加）
-    開発環境/ターミナル ← JavaScript/TS / バックエンド言語 / Swift/Kotlin
+    開発環境/ターミナル ← JavaScript/TS / バックエンド向け言語 / Swift/Kotlin
                           / Flutter/RN
 
 3DグラフィックスとGitは、廃止したOR前提とは別の「親が一意に定まる依存」を
@@ -41,10 +41,9 @@ from config.items import item_index
 and_prerequisites = {
     "JavaScript/TS": ["HTML/CSS"],
     "フロントFW(React等)": ["JavaScript/TS"],
-    "API設計": ["バックエンド言語"],
+    "API設計": ["バックエンド向け言語"],
     "機械学習": ["Python基礎", "統計・数学"],
     "データ可視化": ["Python基礎"],
-    "アプリストア公開": ["アプリ設計"],
     "Unity": ["C#"],
     "Unreal Engine": ["C++"],
     "ゲーム数学・物理": ["アルゴリズム"],
@@ -56,7 +55,7 @@ and_prerequisites = {
     # 選択肢が1つしかない分野は、
     # 既存のAND前提科目としてそのまま追加する。
     # ------------------------------------------------------
-    "Firebase/Supabase": ["バックエンド言語"],
+    "Firebase/Supabase": ["バックエンド向け言語"],
     "統計・数学": ["Python基礎"],
     "テスト技法(JSTQB)": ["Python基礎"],
     "テスト自動化": ["Python基礎", "テスト技法(JSTQB)"],
