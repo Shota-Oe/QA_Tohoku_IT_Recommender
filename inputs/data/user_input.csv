@@ -9,10 +9,10 @@
 # 表示だけで推薦計算には使わない。分野名は config/fields.py に合わせる。
 #   例: interests,"フロントエンド, ゲーム開発"
 key,value
-クリエイティブ,1.0
+クリエイティブ,0.5
 ロジカル,1.0
 作る↔運用,1.0
-数学,0.5
+数学,1.0
 計画性・正確さ,1.0
-hours_per_week,30
-weeks,24
+hours_per_week,28
+weeks,27
