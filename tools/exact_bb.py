@@ -26,7 +26,7 @@ import numpy as np
 from calculation.prerequisites import check_prerequisites
 from calculation.recommend import recommend
 from config.items import M, hours, item_index, item_names
-from config.prerequisites import and_prerequisites, or_prerequisites
+from config.prerequisites import and_prerequisites
 from config.synergy import synergy_pairs
 from inputs.user_input import T, user
 
@@ -52,11 +52,6 @@ for ch, ps in and_prerequisites.items():
     ci = item_index[ch]
     if ci in pos:
         and_c.append((pos[ci], [pos[item_index[p]] for p in ps]))
-or_c = []
-for ch, ps in or_prerequisites.items():
-    ci = item_index[ch]
-    if ci in pos:
-        or_c.append((pos[ci], [pos[item_index[p]] for p in ps if item_index[p] in pos]))
 
 # 添字kより後ろで得られる価値の上界（価値 + 正シナジー）。
 # ペア(i,j) i<j の利得は「後から選ぶ側」jの時点でaccに加算されるため、
@@ -72,9 +67,6 @@ best = [-np.inf, None]
 def feasible(sel):
     for c, ps in and_c:
         if sel[c] and not all(sel[p] for p in ps):
-            return False
-    for c, ps in or_c:
-        if sel[c] and not any(sel[p] for p in ps):
             return False
     return True
 

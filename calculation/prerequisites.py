@@ -15,12 +15,16 @@
    前提を満たす選択へ変換し、それだけを解の候補にする。
 
 check_prerequisitesは最終検査として残す。
+
+前提科目はAND（全親必須）のみである。OR前提の廃止により、
+子項目の前提クロージャは選択の余地がない一意の集合になり、
+本モジュールの各処理から分岐（どの選択肢を選ぶか）が消えている。
 """
 
 from functools import lru_cache
 
 from config.items import hours, item_index
-from config.prerequisites import and_prerequisites, or_prerequisites
+from config.prerequisites import and_prerequisites
 
 
 def check_prerequisites(z):
@@ -33,7 +37,7 @@ def check_prerequisites(z):
         すべて満たしていればTrue。
 
     violations : list
-        違反している (制約種別, 子項目, 前提項目) の一覧。
+        違反している (子項目, 前提項目) の一覧。
     """
     violations = []
 
@@ -48,36 +52,14 @@ def check_prerequisites(z):
             parent = item_index[parent_name]
 
             if z[parent] == 0:
-                violations.append(("AND", child_name, parent_name))
-
-    # OR前提：リストのいずれか1項目が選ばれていればよい
-    for child_name, parent_names in or_prerequisites.items():
-        child = item_index[child_name]
-
-        if z[child] == 0:
-            continue
-
-        parent_indices = [item_index[parent_name] for parent_name in parent_names]
-
-        # 選択肢の中に1つでも選ばれていればOK
-        any_parent_selected = any(z[parent] == 1 for parent in parent_indices)
-
-        if not any_parent_selected:
-            violations.append(("OR", child_name, tuple(parent_names)))
+                violations.append((child_name, parent_name))
 
     return len(violations) == 0, violations
 
 
 def add_prerequisites_to_candidates(candidate_mask):
     """
-    価値が正の項目を起点として、
-    必要な前提科目（AND・OR両方）を
-    再帰的に候補へ追加する。
-
-    OR前提については、どの選択肢が選ばれるかは
-    アニーリング側が決めるため、選択肢を"すべて"候補に
-    追加しておく（候補に入っていない項目はQUBOの変数として
-    存在しないので、選ばれる余地すらなくなってしまう）。
+    候補項目が必要とする前提科目を、再帰的に候補へ追加する。
 
     前提科目へ追加の価値は与えない。
     """
@@ -88,7 +70,6 @@ def add_prerequisites_to_candidates(candidate_mask):
     while changed:
         changed = False
 
-        # AND前提：全項目を候補に追加する
         for child_name, parent_names in and_prerequisites.items():
             child = item_index[child_name]
 
@@ -104,64 +85,25 @@ def add_prerequisites_to_candidates(candidate_mask):
                     candidate_mask[parent] = True
                     changed = True  # 追加が発生したので、もう一周チェックする
 
-        # OR前提：選択肢をすべて候補に追加する
-        # （実際に選ばれるのはこの中の1つ以上でよい）
-        for child_name, parent_names in or_prerequisites.items():
-            child = item_index[child_name]
-
-            if not candidate_mask[child]:
-                continue
-
-            for parent_name in parent_names:
-                parent = item_index[parent_name]
-
-                if not candidate_mask[parent]:
-                    candidate_mask[parent] = True
-                    changed = True
-
     return candidate_mask
 
 
 @lru_cache(maxsize=None)
-def _min_closure_hours(selected):
+def prerequisite_closure(item_name):
     """
-    選択済み集合selected（項目名のfrozenset）を含み、
-    前提科目制約をすべて満たす項目集合のうち、
-    合計学習時間が最小のものの時間を返す。
+    項目を1つ選ぶときに一緒に選ばざるを得ない項目の集合
+    （その項目自身を含む前提クロージャ）を返す。
 
-    AND前提は不足親の追加が強制なのでそのまま再帰し、
-    OR前提は選択肢ごとに分岐して最小値を取る。
-    共有された親は集合なので二重計上されない。
+    AND前提だけなので、どの親を選ぶかの分岐はなく、
+    クロージャは項目ごとに一意に定まる。
+    共有された親は集合なので二重に現れない。
     """
-    # AND前提：不足している親をすべて追加する（強制）
-    for child_name, parent_names in and_prerequisites.items():
-        if child_name not in selected:
-            continue
+    closure = {item_name}
 
-        missing = frozenset(
-            parent_name
-            for parent_name in parent_names
-            if parent_name not in selected
-        )
+    for parent_name in and_prerequisites.get(item_name, []):
+        closure |= prerequisite_closure(parent_name)
 
-        if missing:
-            return _min_closure_hours(selected | missing)
-
-    # OR前提：どの選択肢を選ぶかで分岐し、最小の合計時間を取る
-    for child_name, parent_names in or_prerequisites.items():
-        if child_name not in selected:
-            continue
-
-        if any(parent_name in selected for parent_name in parent_names):
-            continue
-
-        return min(
-            _min_closure_hours(selected | frozenset([parent_name]))
-            for parent_name in parent_names
-        )
-
-    # すべての前提が満たされた
-    return int(sum(hours[item_index[name]] for name in selected))
+    return frozenset(closure)
 
 
 def min_closure_hours(item_name):
@@ -169,7 +111,9 @@ def min_closure_hours(item_name):
     項目を1つ選ぶために最低限必要な合計学習時間
     （前提クロージャ込み）を返す。
     """
-    return _min_closure_hours(frozenset([item_name]))
+    return int(
+        sum(hours[item_index[name]] for name in prerequisite_closure(item_name))
+    )
 
 
 def restrict_candidates_by_budget(candidate_mask, T):
@@ -206,7 +150,7 @@ def repair_prerequisites(z):
     前提科目を満たさない子項目を、すべて満たされるまで
     取り除く（下方修復）。
 
-    AND・OR前提はどちらも親の選択に対して単調
+    AND前提は親の選択に対して単調
     （親が増えて制約が破れることはない）なので、
     取り除く順序によらず「元の選択に含まれる
     最大の実行可能部分集合」に収束する。
@@ -231,7 +175,7 @@ def repair_prerequisites(z):
     while changed:
         changed = False
 
-        # AND前提：親が1つでも欠けている子項目を取り除く
+        # 親が1つでも欠けている子項目を取り除く
         for child_name, parent_names in and_prerequisites.items():
             child = item_index[child_name]
 
@@ -243,29 +187,15 @@ def repair_prerequisites(z):
                 removed_names.append(child_name)
                 changed = True  # 連鎖的な違反を再チェックする
 
-        # OR前提：選択肢が1つも選ばれていない子項目を取り除く
-        for child_name, parent_names in or_prerequisites.items():
-            child = item_index[child_name]
-
-            if z[child] == 0:
-                continue
-
-            if all(z[item_index[p]] == 0 for p in parent_names):
-                z[child] = 0
-                removed_names.append(child_name)
-                changed = True
-
     return z, removed_names
 
 
-def complete_prerequisites(z, item_value, candidate_mask):
+def complete_prerequisites(z, candidate_mask):
     """
     前提科目が不足している子項目を諦める代わりに、
     不足している前提科目を追加して前提を満たす（上方補完）。
 
-    AND前提は不足親をすべて追加する。
-    OR前提は候補内の選択肢のうち価値が最大
-    （同価値なら学習時間が最短）の親を1つ追加する。
+    不足している親をすべて追加する。
     追加した親にさらに前提があれば連鎖的に補完する。
 
     項目を追加するので合計学習時間は増える。
@@ -289,7 +219,6 @@ def complete_prerequisites(z, item_value, candidate_mask):
     while changed:
         changed = False
 
-        # AND前提：不足親をすべて追加する
         for child_name, parent_names in and_prerequisites.items():
             child = item_index[child_name]
 
@@ -308,31 +237,5 @@ def complete_prerequisites(z, item_value, candidate_mask):
                 z[parent] = 1
                 added_names.append(parent_name)
                 changed = True  # 追加した親の前提も再チェックする
-
-        # OR前提：最も価値の高い選択肢を1つ追加する
-        for child_name, parent_names in or_prerequisites.items():
-            child = item_index[child_name]
-
-            if z[child] == 0:
-                continue
-
-            if any(z[item_index[p]] == 1 for p in parent_names):
-                continue
-
-            allowed_names = [
-                p for p in parent_names if candidate_mask[item_index[p]]
-            ]
-
-            if len(allowed_names) == 0:
-                return None, []
-
-            best_parent_name = min(
-                allowed_names,
-                key=lambda p: (-item_value[item_index[p]], hours[item_index[p]]),
-            )
-
-            z[item_index[best_parent_name]] = 1
-            added_names.append(best_parent_name)
-            changed = True
 
     return z, added_names

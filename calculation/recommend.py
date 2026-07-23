@@ -14,7 +14,6 @@
 項目ペアのシナジー（同時に選んだ場合だけ発生する価値）を算出
   ↓
 予算制約・シナジー項・条件付き価値をQUBO化
-（前提科目のペナルティ項は目的関数に含めない）
   ↓
 アニーリング
   ↓
@@ -44,7 +43,7 @@ from config.parameters import (
     DEFAULT_NUM_SWEEPS,
     DEFAULT_SEED,
 )
-from config.prerequisites import and_prerequisites, or_prerequisites
+from config.prerequisites import and_prerequisites
 from config.synergy import item_synergy
 
 
@@ -181,19 +180,13 @@ def recommend(
     # 候補項目に必要な前提科目を候補へ追加する
     # （前提科目制約の前処理その2：候補展開）。
 
+    # 候補展開の後に枝刈りをやり直す必要はない。
+    # 追加される親の前提クロージャは子のクロージャの部分集合なので、
+    # 子が枝刈りを通っていれば親の最小クロージャ時間も必ずT以下になる
+    # （OR前提があった頃は、選択肢として追加した項目が
+    #   単独では予算に収まらない場合があり、2回目の枝刈りが要った）。
+
     candidate_mask = add_prerequisites_to_candidates(candidate_mask)
-
-    # OR前提の選択肢として追加された項目の中にも
-    # 予算内で前提を満たせないものがあり得るため、もう一度だけ外す。
-    # （候補に残った子項目には、必ず予算内で選べる選択肢が残る）
-
-    candidate_mask, pruned_or_parents = restrict_candidates_by_budget(
-        candidate_mask, T
-    )
-
-    # 1回目の枝刈りで外れた項目が候補展開で再追加され、
-    # 2回目でまた外れると重複するため、順序を保って一意化する
-    pruned_items = list(dict.fromkeys(pruned_items + pruned_or_parents))
 
     candidate_indices = np.flatnonzero(candidate_mask).tolist()
 
@@ -235,12 +228,7 @@ def recommend(
     # 8節で二次項として追加するため、ここでは線形項を与えない。
 
     for j in candidate_indices:
-        has_prerequisites = (
-            item_names[j] in and_prerequisites
-            or item_names[j] in or_prerequisites
-        )
-
-        if has_prerequisites:
+        if item_names[j] in and_prerequisites:
             bqm.add_variable(f"item_{j}", 0.0)
         else:
             bqm.add_variable(f"item_{j}", -float(item_value[j]))
@@ -367,7 +355,7 @@ def recommend(
 
     # 前提科目はハード制約であり、ペナルティ項では担保しない
     # （担保は前処理＝候補集合の制限と、10節の修復デコードが行う）。
-    # そのため、旧実装にあったAND/ORペナルティ項と
+    # そのため、旧実装にあった前提科目のペナルティ項と
     # OR用スラック変数（or_slack_*）はQUBOに存在しない。
     #
     # その代わり、前提科目を持つ子項目の価値V_childを
@@ -382,30 +370,15 @@ def recommend(
     #   全親を選択 → -V（満額）／親が1つ欠ける → 0（価値なし）
     #   ／さらに欠ける → 正（予算を消費するだけで損）
     #
-    # OR前提（親p_1..p_mのどれか1つでよい）：
-    #   -(V/min(m,2)) * child * (p_1 + ... + p_m)
-    #
-    #   選ばれた選択肢の数に比例した価値を与える近似。
-    #   実際の解で選ばれる選択肢は1～2個であることが多いため、
-    #   分母は2で頭打ちにする（選択肢1個で価値の半分、2個で満額）。
-    #   前提充足の担保はデコード側が行うため、
-    #   この近似は解の正しさには影響しない。
-    #
-    # AND・OR両方の前提を持つ項目は、価値を2グループへ均等に分ける。
+    # 前提科目はAND前提のみなので、この表現は近似ではなく
+    # 「前提が揃ったとき、かつそのときだけ満額」を厳密に表す
+    # （OR前提があった頃は選択肢数に比例する近似項が別に必要だった）。
 
     for j in candidate_indices:
         child_name = item_names[j]
 
-        prerequisite_groups = []
-
-        if child_name in and_prerequisites:
-            prerequisite_groups.append(("AND", and_prerequisites[child_name]))
-
-        if child_name in or_prerequisites:
-            prerequisite_groups.append(("OR", or_prerequisites[child_name]))
-
         # 前提のない項目の価値は5節で線形項として追加済み
-        if not prerequisite_groups:
+        if child_name not in and_prerequisites:
             continue
 
         child_value = float(item_value[j])
@@ -414,55 +387,25 @@ def recommend(
         if child_value == 0.0:
             continue
 
-        group_value = child_value / len(prerequisite_groups)
-
         child_variable = f"item_{j}"
 
-        for kind, parent_names in prerequisite_groups:
-            if kind == "AND":
-                # AND前提の親は候補展開で必ず候補に入っている
-                parent_indices = []
+        # 前提科目は候補展開で必ず候補に入っている
+        parent_indices = []
 
-                for parent_name in parent_names:
-                    parent = item_index[parent_name]
+        for parent_name in and_prerequisites[child_name]:
+            parent = item_index[parent_name]
 
-                    if not candidate_mask[parent]:
-                        raise RuntimeError(
-                            f"前提科目「{parent_name}」が候補に追加されていません。"
-                        )
-
-                    parent_indices.append(parent)
-
-                for parent in parent_indices:
-                    bqm.add_quadratic(
-                        child_variable, f"item_{parent}", -group_value
-                    )
-
-                bqm.add_linear(
-                    child_variable, group_value * (len(parent_indices) - 1)
+            if not candidate_mask[parent]:
+                raise RuntimeError(
+                    f"前提科目「{parent_name}」が候補に追加されていません。"
                 )
 
-            else:
-                # OR前提の選択肢は予算枝刈りで候補外になっている場合がある
-                parent_indices = [
-                    item_index[parent_name]
-                    for parent_name in parent_names
-                    if candidate_mask[item_index[parent_name]]
-                ]
+            parent_indices.append(parent)
 
-                if len(parent_indices) == 0:
-                    raise RuntimeError(
-                        f"「{child_name}」のOR前提の選択肢が候補にありません。"
-                    )
+        for parent in parent_indices:
+            bqm.add_quadratic(child_variable, f"item_{parent}", -child_value)
 
-                credit_denominator = min(len(parent_indices), 2)
-
-                for parent in parent_indices:
-                    bqm.add_quadratic(
-                        child_variable,
-                        f"item_{parent}",
-                        -group_value / credit_denominator,
-                    )
+        bqm.add_linear(child_variable, child_value * (len(parent_indices) - 1))
 
     # ========================================================
     # 9. アニーリング
@@ -543,9 +486,7 @@ def recommend(
         # 不足親を追加する上方補完も試し、予算内に収まれば候補に加える
         # （高価値の子項目を捨てずに済む解を拾うため）
         if removed_names:
-            z_completed, _ = complete_prerequisites(
-                z_raw, item_value, candidate_mask
-            )
+            z_completed, _ = complete_prerequisites(z_raw, candidate_mask)
 
             if z_completed is not None:
                 completed_hours = int(hours @ z_completed)
