@@ -41,6 +41,7 @@ from config.parameters import (
     DEFAULT_MIN_RELEVANCE,
     DEFAULT_NUM_READS,
     DEFAULT_NUM_SWEEPS,
+    DEFAULT_PENALTY_MARGIN,
     DEFAULT_SEED,
 )
 from config.prerequisites import and_prerequisites
@@ -54,6 +55,7 @@ def recommend(
     num_reads=DEFAULT_NUM_READS,
     num_sweeps=DEFAULT_NUM_SWEEPS,
     seed=DEFAULT_SEED,
+    penalty_margin=DEFAULT_PENALTY_MARGIN,
     sampler=None,
 ):
     """
@@ -78,6 +80,10 @@ def recommend(
 
     seed : int
         乱数シード。
+
+    penalty_margin : float
+        予算制約ペナルティ係数の安全マージン。
+        A = max_j(V_j + Σ正シナジー) × (1 + penalty_margin)。
 
     sampler :
         Noneの場合はnealのSimulatedAnnealingSamplerを使用する。
@@ -273,24 +279,69 @@ def recommend(
     # 6. ペナルティ係数（予算制約専用）
     # ========================================================
 
-    # 項目とシナジーをすべて得た場合に得られる報酬の上限。
-    # 前提科目は目的関数で担保しないため、
-    # ペナルティ係数を使う制約は予算制約（7節）だけになった。
+    # QUBO に残るペナルティ項は予算制約（7節）ただ一つ
+    # （前提科目は前処理＋修復デコードで担保し、ペナルティ項を持たない）。
+    # その係数 A は「違反を防ぐのに必要な最小値」から決める。
     #
-    # 前提科目として追加された価値0の項目は報酬に影響しない。
-    # 条件付き価値（8節）で得られる報酬も項目価値V_jを超えないので、
-    # この上限はそのまま使える。
+    # 予算を1単位超えた解からは、他の選択項目の前提になっていない項目
+    # （前提DAGの極大元。選択が空でなければ必ず存在する）を1つ除去すれば、
+    # 子項目の条件付き価値を巻き添えにせず実行可能化できる。
+    # このとき失う報酬の主要項は「単一項目の限界寄与」である：
     #
-    # シナジー項が加わった分、報酬の上限も引き上げておかないと、
-    # 制約を破ってでもシナジーを稼いだ方が得になってしまう。
+    #   限界寄与_j = V_j + Σ_i max(0, S_ij)
+    #             （項目jの価値 ＋ jが持つ正のシナジーの合計）
+    #
+    # 予算を1単位超えるごとにペナルティは A 増えるので、
+    #   A > max_j 限界寄与
+    # なら1単位違反の解はその除去先（実行可能）に負ける。
+    #
+    # 旧実装の「得られる最大報酬の合計＋1」は「1単位の超過で全報酬が
+    # 消える」ほど過大で、目的差（0.15〜2.4）に対し1〜2桁大きい
+    # ペナルティになっていた（issue #8）。単一項目の限界寄与を基準に
+    # すると、この桁差が解消する。
+    #
+    # OR前提を廃止したことで、この基準は厳密な上界になった。
+    # 8節の条件付き価値はAND前提のみとなり、親が揃ったときの報酬は
+    # ちょうど V_j（満額）で頭打ちになるためである
+    # （OR前提があった頃は、親をk個選んだ子の報酬が
+    #   V_j·k/min(m,2) まで膨らみ限界寄与を上回りうるため、
+    #   「A > 限界寄与 なら常に実行可能解が勝つ」と主張できなかった）。
+    #
+    # 前提科目として追加された価値0の項目は限界寄与も0で影響しない。
+    #
+    # なお桁差の解消は解の品質を改善しなかった（Aを1/12にしても達成率は
+    # 94.3%→94.9%でシード間ばらつきに埋もれる。docs/presentation.md 第7章）。
+    # 桁差は品質のボトルネックではなかった、というのが実測の結論である。
+    #
+    # report 表示用に、報酬の総量上限も併せて求めておく
+    # （係数の決定には使わない）。
+
+    positive_synergy_per_item = {j: 0.0 for j in candidate_indices}
+
+    for a in range(len(candidate_indices)):
+        i = candidate_indices[a]
+
+        for b in range(a + 1, len(candidate_indices)):
+            j = candidate_indices[b]
+
+            synergy_value = item_synergy[i, j]
+
+            if synergy_value > 0.0:
+                positive_synergy_per_item[i] += float(synergy_value)
+                positive_synergy_per_item[j] += float(synergy_value)
+
+    marginal_contribution = max(
+        max(0.0, float(item_value[j])) + positive_synergy_per_item[j]
+        for j in candidate_indices
+    )
+
+    # 厳密不等号を保つため、限界寄与に微小マージンを掛ける。
+    constraint_penalty = marginal_contribution * (1.0 + penalty_margin)
 
     reward_upper_bound = (
         sum(max(0.0, float(item_value[j])) for j in candidate_indices)
         + synergy_upper_bound
     )
-
-    # 最小の制約違反ペナルティが、得られる最大報酬より大きくなるようにする。
-    constraint_penalty = reward_upper_bound + 1.0
 
     # ========================================================
     # 7. 予算制約
@@ -573,6 +624,7 @@ def recommend(
         "budget_units": budget_units,
         "slack_weights": slack_weights,
         "reward_upper_bound": reward_upper_bound,
+        "marginal_contribution": marginal_contribution,
         "constraint_penalty": constraint_penalty,
         "synergy_upper_bound": synergy_upper_bound,
         "active_synergies": active_synergies,

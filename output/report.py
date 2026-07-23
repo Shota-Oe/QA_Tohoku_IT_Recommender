@@ -139,7 +139,10 @@ def print_report(user, hours_per_week, weeks, T, z, field_score, debug_info):
         f"（うちシナジー上限：{debug_info['synergy_upper_bound']:.3f}）"
     )
 
-    print(f"【制約ペナルティ係数】{debug_info['constraint_penalty']:.3f}")
+    print(
+        f"【予算ペナルティ係数】{debug_info['constraint_penalty']:.3f}"
+        f"（基準＝単一項目の限界寄与 {debug_info['marginal_contribution']:.3f}）"
+    )
 
     if debug_info["pruned_items"]:
         print(
