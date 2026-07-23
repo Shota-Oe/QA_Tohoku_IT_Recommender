@@ -19,6 +19,33 @@ pip install -r requirements.txt
 python main.py
 ```
 
+### D-Wave 実機 QPU で解く
+
+`--backend qpu` を付けると、アニーリングを Leap 経由で D-Wave の実機 QPU に投げる。
+
+```
+python main.py --backend qpu
+```
+
+事前にプロジェクト直下の `.env` へ API トークンを置く（`.env` は `.gitignore` 済み）。
+
+```
+DWAVE_API_TOKEN=DEV-xxxxxxxxxxxxxxxx
+```
+
+| オプション | 既定値 | 説明 |
+| --- | --- | --- |
+| `--backend` | `neal` | `neal`（ローカルSA）／`qpu`（実機） |
+| `--num-reads` | neal 5000／qpu 1000 | アニーリングの実行回数 |
+| `--solver` | Leap の自動選択 | QPU の機種名（例 `Advantage_system6`） |
+| `--annealing-time` | `20` | 1回のアニール時間（マイクロ秒） |
+| `--chain-strength` | 自動決定 | マイナー埋め込みの鎖の強さ |
+| `--no-plot` | — | グラフを出さずテキスト結果だけ表示 |
+
+QPU 実行時は、埋め込み規模・鎖切れ率・QPU アクセス時間・問題 ID がレポート末尾に出る。
+QPU はマシン時間が課金対象（Leap 無料枠は月1分）で、`--num-reads 1000` の1回で
+約 0.13 秒を消費する。
+
 適性や学習時間を変えたいときは `inputs/data/user_input.csv` を、
 係数（分野・項目・シナジー・前提科目・アニーリング設定）を変えたいときは
 `config/` 以下の各ファイルを編集する。

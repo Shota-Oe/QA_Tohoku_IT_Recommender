@@ -35,6 +35,7 @@ from calculation.prerequisites import (
     repair_prerequisites,
     restrict_candidates_by_budget,
 )
+from calculation.sampler import summarize_sampleset
 from config.fields import F
 from config.items import M, hours, item_fields, item_index, item_names
 from config.parameters import (
@@ -48,6 +49,29 @@ from config.prerequisites import and_prerequisites
 from config.synergy import item_synergy
 
 
+def coefficient_ratio(bqm):
+    """QUBO係数のダイナミックレンジ（最大絶対値 ÷ 最小絶対値）。
+
+    実機QPUは係数を「最大絶対値が1になる」ように自動スケールしてから
+    磁束として印加するため、この比が大きいほど小さい係数が
+    ハードウェアの制御誤差（ICE）に埋もれる。
+    予算制約ペナルティは重み最大32のスラック変数と掛け合わさって
+    数千の係数になる一方、項目価値は1前後なので、この比は数千に達する。
+    QPUで解の品質が落ちる場合、まずここを疑う指標になる
+    （nealは倍精度で計算するため影響を受けない）。
+    """
+    magnitudes = [
+        abs(value)
+        for value in list(bqm.linear.values()) + list(bqm.quadratic.values())
+        if value != 0.0
+    ]
+
+    if not magnitudes:
+        return 1.0
+
+    return max(magnitudes) / min(magnitudes)
+
+
 def recommend(
     user,
     T,
@@ -57,6 +81,7 @@ def recommend(
     seed=DEFAULT_SEED,
     penalty_margin=DEFAULT_PENALTY_MARGIN,
     sampler=None,
+    sampler_kwargs=None,
 ):
     """
     QUBOとアニーリングによって学習項目を推薦する。
@@ -87,7 +112,12 @@ def recommend(
 
     sampler :
         Noneの場合はnealのSimulatedAnnealingSamplerを使用する。
-        D-Wave QPU用サンプラーを渡すこともできる。
+        D-Wave QPU用サンプラーを渡すこともできる
+        （calculation.sampler.build_sampler が生成する）。
+
+    sampler_kwargs : dict or None
+        サンプラー固有の追加引数（QPUのannealing_time、chain_strengthなど）。
+        num_reads・num_sweeps・seedより優先される。
 
     Returns
     -------
@@ -474,6 +504,10 @@ def recommend(
             "seed": seed,
         })
 
+    # サンプラー固有の引数（QPUのannealing_timeなど）を上書きで反映する
+    if sampler_kwargs:
+        sample_kwargs.update(sampler_kwargs)
+
     sampleset = sampler.sample(bqm, **sample_kwargs)
 
     # ========================================================
@@ -637,6 +671,8 @@ def recommend(
         "prerequisite_repair_count": prerequisite_repair_count,
         "bqm": bqm,
         "sampleset": sampleset,
+        "coefficient_ratio": coefficient_ratio(bqm),
+        "solver_info": summarize_sampleset(sampleset),
     }
 
     return z, field_score, debug_info

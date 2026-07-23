@@ -65,7 +65,59 @@ def summarize_selection(z, debug_info):
     return selected
 
 
-def print_report(user, hours_per_week, weeks, T, z, field_score, debug_info):
+def print_solver_info(debug_info, backend_description):
+    """アニーリング実行基盤の情報を表示する。
+
+    実機QPUのときは、マイナー埋め込みの規模・鎖切れ率・QPU時間という
+    「実機でしか出てこない指標」を併せて出す。
+    """
+    solver_info = debug_info.get("solver_info") or {}
+
+    print(f"\n【アニーリング実行基盤】{backend_description}")
+
+    print(
+        f"【QUBO規模】{debug_info['bqm'].num_variables}変数／"
+        f"二次項{debug_info['bqm'].num_interactions}"
+        f"｜係数のダイナミックレンジ {debug_info['coefficient_ratio']:.0f}倍"
+    )
+
+    if not solver_info:
+        return
+
+    if "physical_qubits" in solver_info:
+        print(
+            f"【マイナー埋め込み】物理量子ビット{solver_info['physical_qubits']}個"
+            f"（鎖長 平均{solver_info['mean_chain_length']:.1f}／"
+            f"最大{solver_info['max_chain_length']}）"
+        )
+
+    if "chain_break_mean" in solver_info:
+        print(
+            f"【鎖切れ率】平均{solver_info['chain_break_mean']:.3f}／"
+            f"最大{solver_info['chain_break_max']:.3f}"
+            f"｜鎖切れなしのサンプル {solver_info['chain_break_free_ratio']:.1%}"
+        )
+
+    if "qpu_access_time" in solver_info:
+        print(
+            f"【QPUアクセス時間】{solver_info['qpu_access_time'] / 1000:.1f}ms"
+            f"（うちアニール {solver_info['qpu_anneal_time_per_sample']:.0f}µs/サンプル）"
+        )
+
+    if "problem_id" in solver_info:
+        print(f"【問題ID】{solver_info['problem_id']}")
+
+
+def print_report(
+    user,
+    hours_per_week,
+    weeks,
+    T,
+    z,
+    field_score,
+    debug_info,
+    backend_description="neal（シミュレーテッド・アニーリング／ローカル）",
+):
     """推薦結果を標準出力へ表示する。"""
     selected = summarize_selection(z, debug_info)
 
@@ -164,5 +216,7 @@ def print_report(user, hours_per_week, weeks, T, z, field_score, debug_info):
     print(f"【採用解の目的関数値（価値＋シナジー）】{debug_info['best_score']:.3f}")
 
     print(f"【採用解のQUBOエネルギー】{debug_info['energy']:.3f}")
+
+    print_solver_info(debug_info, backend_description)
 
     print("=" * 76)

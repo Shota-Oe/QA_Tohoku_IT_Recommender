@@ -3,3 +3,5 @@ matplotlib
 japanize-matplotlib
 dimod
 dwave-neal
+dwave-system
+python-dotenv

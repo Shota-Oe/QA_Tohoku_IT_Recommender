@@ -49,3 +49,25 @@ DEFAULT_PENALTY_MARGIN = 0.01
 DEFAULT_NUM_READS = 5000
 DEFAULT_NUM_SWEEPS = 5000
 DEFAULT_SEED = 42
+
+
+# ============================================================
+# D-Wave 実機 QPU の設定
+# ============================================================
+
+# QPUの実行回数。
+# QPUはマシン時間が課金対象（Leap無料枠は月1分）で、
+# 1回の読み出しにアニール＋読み出しで100マイクロ秒程度かかる。
+# nealと同じ5000回は無料枠の1割弱を1実行で使うため、既定は控えめにする。
+DEFAULT_QPU_NUM_READS = 1000
+
+# 1回のアニーリングにかける時間（マイクロ秒）。
+# D-Waveの既定値は20マイクロ秒。長くすると断熱条件に近づくが、
+# その分だけ消費するマシン時間も増える。
+DEFAULT_ANNEALING_TIME = 20
+
+# 使用するQPUの機種名。
+# Noneの場合はLeapが利用可能なQPUを自動で選ぶ。
+# 例："Advantage_system6"（Pegasus, 5760量子ビット）
+#     "Advantage2_system1"（Zephyr, 4800量子ビット）
+DEFAULT_QPU_SOLVER = None
