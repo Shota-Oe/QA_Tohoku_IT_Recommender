@@ -51,6 +51,104 @@ QPU はマシン時間が課金対象で、実行のたびに消費する（Leap
 
 ---
 
+## 実験手順
+
+[`main.py`](main.py) の単発実行に対し、複数のアンケート回答を一括でアニーリングして
+結果を横断比較する**バッチ実験**は [`tools/run_all_inputs.py`](tools/run_all_inputs.py) で行う。
+解の品質は検証用のスタンドアロンスクリプトで確認できる（本体パイプラインからは参照されない）。
+
+### 1. 準備
+
+```
+pip install -r requirements.txt
+```
+
+- **入力データ**：`inputs/data/user_input_1.csv` 〜 `user_input_11.csv` を用意する。
+  `inputs/data/` は `.gitignore` 済みなので各自で配置する。書式は `inputs/data/template.csv`
+  と「[入力](#入力)」節を参照。
+- **（QPU で回す場合のみ）**：プロジェクト直下の `.env` に自分の Leap トークンを置く。
+
+  ```
+  DWAVE_API_TOKEN=DEV-xxxxxxxxxxxx
+  ```
+
+  QPU はマシン時間が課金対象で、Leap 無料枠は月1分（→[実行方法](#実行方法)）。まずは neal で動作を確かめる。
+
+### 2. バッチ実験の実行（`tools/run_all_inputs.py`）
+
+リポジトリルートから実行する。既定はローカルの neal（課金なし）で、実機 QPU で回すときだけ
+`--backend qpu` を明示する。グラフはウィンドウ表示せずファイルへ保存し、Windows コンソール
+（cp932）でも進捗が文字化けしないよう UTF-8 で出力する。
+
+```
+python tools/run_all_inputs.py                              # neal で入力 1〜11 を一括実行
+python tools/run_all_inputs.py --backend qpu                # 実機QPU で 1〜11
+python tools/run_all_inputs.py --backend neal --inputs 5    # neal で入力5だけ
+python tools/run_all_inputs.py --inputs 2 3 7 --num-reads 2000
+```
+
+| オプション | 既定値 | 説明 |
+| --- | --- | --- |
+| `--backend` | `neal` | `neal`（ローカルSA）／`qpu`（実機） |
+| `--inputs` | `1〜11` | 対象の入力番号（スペース区切りで複数指定可） |
+| `--num-reads` | backend の既定値（=100） | アニーリングの実行回数 |
+| `--annealing-time` | config の既定値（20µs） | QPU の1回当たりのアニール時間（マイクロ秒。QPU のみ有効） |
+
+※ このオプション表は [`main.py`](main.py) のもの（「[実行方法](#実行方法)」節）とは別物で、
+バッチランナーは `--solver` / `--chain-strength` / `--no-plot` を持たない。
+
+### 3. 出力の確認
+
+結果は `output/result/` に書き出される（`.gitignore` 済み）。
+
+```
+output/result/
+  <N>/report.txt   … 入力 N の推薦レポート全文（先頭に backend・num_reads を付与）
+  <N>/graph.png    … 分野相性・項目価値の2枚グラフ
+  <N>/error.txt    … その件が例外で落ちたときだけ（トレースバック）
+  summary.md       … 全件横断の比較表
+  summary.csv      … 同上（Excel 向けに UTF-8 BOM 付き）
+```
+
+`summary.md` / `summary.csv` の列は
+**入力 / 回答者 / 状態 / 予算T(h) / 週h / 週数 / 推薦数 / 使用(h) / 目的関数値 /
+QUBOエネルギー / 実行可能数 / QPU時間(µs) / 鎖切れ平均 / problem_id / 推薦項目**。
+neal と QPU の解を比較したいときは、それぞれ `--backend` を変えて実行し、両方の summary を突き合わせる。
+
+### 4. 検証ツール
+
+- **厳密最適解との比較**
+
+  ```
+  python tools/exact_bb.py
+  ```
+
+  本体と同じ候補集合・価値・シナジー・前提のもとで厳密最適解を分枝限定法で求め、
+  アニーリング解の達成率を出す（[`tools/exact_bb.py`](tools/exact_bb.py)）。
+
+- **分野プロファイルの健全性チェック**
+
+  ```
+  python tools/profile_check.py
+  ```
+
+  適性 3⁵ = 243 パターンを列挙し、各軸が区別に効いているか・特定の分野だけが有利に
+  なっていないかを監査する。`config/fields.py` の値を変えたときに使う。
+
+> **注意**：`tools/exact_bb.py` / `tools/profile_check.py` / `main.py` は import 時に既定の
+> 入力 CSV を読み込むが、その既定ファイル（`user_input.csv` 等）は通常配置されていないため、
+> そのままだと `FileNotFoundError` になる。実在する入力を環境変数で差し替えて実行する
+> （下は PowerShell の例）。
+>
+> ```
+> $env:USER_INPUT_CSV="inputs/data/user_input_5.csv"; python tools/exact_bb.py
+> $env:USER_INPUT_CSV="inputs/data/user_input_5.csv"; python tools/profile_check.py
+> ```
+>
+> `tools/run_all_inputs.py` は各件を明示パスで読み込むため、この差し替えは不要。
+
+---
+
 ## ディレクトリ構成
 
 ```
