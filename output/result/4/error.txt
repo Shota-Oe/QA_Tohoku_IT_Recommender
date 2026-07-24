@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "<repo>\tools\run_all_inputs.py", line 178, in run_one
+    z, field_score, debug_info = recommend(
+                                 ~~~~~~~~~^
+        user=user,
+        ^^^^^^^^^^
+    ...<4 lines>...
+        sampler_kwargs=sampler_kwargs,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "<repo>\calculation\recommend.py", line 216, in recommend
+    raise RuntimeError("min_relevance以上の相性を持つIT分野がありません。")
+RuntimeError: min_relevance以上の相性を持つIT分野がありません。
