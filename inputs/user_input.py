@@ -39,7 +39,7 @@ from config.fields import field_index
 from config.items import item_index
 from config.parameters import HIGH, LOW, MID, axis_names
 
-FILE_NAME = "user_input.csv"
+FILE_NAME = "user_input_r5.csv"
 
 # デフォルトの CSV パス（inputs/data/user_input.csv）
 DEFAULT_CSV_PATH = os.path.join(
