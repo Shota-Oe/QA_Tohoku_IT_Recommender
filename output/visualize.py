@@ -13,7 +13,7 @@ def plot_results(z, T, field_score, debug_info):
 
     QUBOエネルギーの分布は「アニーリングがどう動いたか」の図であって
     「何を学べばよいか」の図ではないため、推薦結果の可視化からは外してある
-    （エネルギーの値はテキストレポートに残る。docs/requirements.md 第12.4節）。
+    （エネルギーの値はテキストレポートに残るので、情報は失われない）。
     """
     sorted_fields = sort_fields_by_score(
         field_score,
