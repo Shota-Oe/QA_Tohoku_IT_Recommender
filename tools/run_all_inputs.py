@@ -23,6 +23,7 @@ import argparse
 import csv
 import io
 import os
+import re
 import sys
 import traceback
 from contextlib import redirect_stdout
@@ -67,6 +68,17 @@ from output.visualize import plot_results  # noqa: E402
 
 DATA_DIR = ROOT / "inputs" / "data"
 RESULT_DIR = ROOT / "output" / "result"
+
+# 出力ファイルは実験データとして公開する前提のため、個人を特定できる情報
+# （アンケート回答者のメールアドレス・回答日時、実行環境の絶対パス）が
+# 書き出されないようにする。
+EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+TIMESTAMP_PATTERN = re.compile(
+    r"\d{4}[/-]\d{1,2}[/-]\d{1,2}(\s+\d{1,2}:\d{2}(:\d{2})?)?"
+)
+
+# 絶対パスに含まれる OS ユーザー名を隠すための置換先
+ROOT_PLACEHOLDER = "<repo>"
 
 # summary の列（キー → 見出し）。順序を保つため list of (key, header)。
 SUMMARY_COLUMNS = [
@@ -120,14 +132,34 @@ def parse_arguments():
     return parser.parse_args()
 
 
+def scrub_root(text):
+    """文字列中のリポジトリ絶対パスを ``<repo>`` に置き換える。
+
+    トレースバックやエラーメッセージをそのまま書き出すと
+    ``C:\\Users\\<ユーザー名>\\...`` の形で実行環境のユーザー名が残るため。
+    """
+    return str(text).replace(str(ROOT), ROOT_PLACEHOLDER)
+
+
+def strip_identifiers(text):
+    """回答者を特定できる情報（メールアドレス・日時）を取り除く。
+
+    残った区切り文字（``/``）や空白だけになった場合は空文字を返す。
+    """
+    text = EMAIL_PATTERN.sub("", text)
+    text = TIMESTAMP_PATTERN.sub("", text)
+
+    return text.strip(" \t/-").strip()
+
+
 def read_source_comment(csv_path):
     """CSV 冒頭の ``#`` コメントから回答者を表す文字列を取り出す。
 
-    ``# 元回答: <日時> / <メール>`` 行があればその中身を優先して返し、
-    無ければ最初のコメント行を返す。コメントが無ければ空文字。
+    ``# 元回答: <日時> / <メール>`` 行の中身を返すが、メールアドレスと日時は
+    :func:`strip_identifiers` で落とす（summary は公開する前提のため）。
+    そもそも自由記述のコメントは回答者名などが紛れ込む経路になるので、
+    ``元回答:`` 以外のコメント行は読まず、該当行が無ければ空文字を返す。
     """
-    first_comment = ""
-
     with open(csv_path, encoding="utf-8") as f:
         for line in f:
             stripped = line.strip()
@@ -136,10 +168,7 @@ def read_source_comment(csv_path):
                 text = stripped.lstrip("#").strip()
 
                 if text.startswith("元回答:"):
-                    return text[len("元回答:") :].strip()
-
-                if not first_comment:
-                    first_comment = text
+                    return strip_identifiers(text[len("元回答:") :])
 
                 continue
 
@@ -147,7 +176,7 @@ def read_source_comment(csv_path):
                 # コメント行が続く間だけ走査し、中身が来たら打ち切る
                 break
 
-    return first_comment
+    return ""
 
 
 def run_one(n, sampler, sampler_kwargs, num_reads, backend_description):
@@ -165,7 +194,7 @@ def run_one(n, sampler, sampler_kwargs, num_reads, backend_description):
     if not csv_path.exists():
         row["status"] = "missing"
         (outdir / "error.txt").write_text(
-            f"入力CSVが見つかりません: {csv_path}\n", encoding="utf-8"
+            f"入力CSVが見つかりません: {scrub_root(csv_path)}\n", encoding="utf-8"
         )
         print(f"[{n}] CSVが見つかりません: {csv_path}")
         return row
@@ -246,7 +275,7 @@ def run_one(n, sampler, sampler_kwargs, num_reads, backend_description):
 
     except Exception:
         row["status"] = "error"
-        tb = traceback.format_exc()
+        tb = scrub_root(traceback.format_exc())
         (outdir / "error.txt").write_text(tb, encoding="utf-8")
         # 前回成功時の graph.png が残ると誤解を招くので消しておく
         stale_graph = outdir / "graph.png"
