@@ -1,6 +1,5 @@
 # QA_Tohoku_IT_Recommender
-
-This is the repo of the team-1 of the "Practical Quantum Solution Creation" class.
+This is the repo of the team-1 of the "Quantum Universe Lecture Series".
 
 ## 概要
 
@@ -68,6 +67,13 @@ main.py       エントリーポイント
 `config/` 以下の各ファイルを編集する。
 
 ---
+`config/fields.py` の分野プロファイル（10分野 × 5軸）は
+**O*NET（米国労働省の職業データベース）の職業別記述子から導出した実データ**であり、
+50値すべての出典と導出過程が `docs/field_profile_rationale.md` にある。
+値を変えたときは `python tools/profile_check.py` で、各軸が区別に効いているか・
+特定の分野だけが有利になっていないかを確認できる。
+
+---
 
 ## 入力
 
@@ -117,7 +123,9 @@ interests,"フロントエンド, ゲーム開発"
 適性からの相性と併記して表示される。
 
 - **表示だけで、推薦計算には一切使わない。** 分野は適性5軸からの相性だけで決まる。
-  申告した分野が閾値未満で足切りされている場合も、そのまま並べて表示する。
+  申告した分野が相性 0.60 未満で足切りされている場合も、そのまま並べて表示する。
+  相性は分野ごとに正規化してあり（1.0 = その分野の典型像と完全一致 /
+  0.0 = その分野に最も適性がない）、閾値はどの分野でも同じ意味を持つ。
 - 分野名は `config/fields.py` の名前と一致させる（項目名ではなく**分野名**。
   一致しない名前はエラーになる）。
 

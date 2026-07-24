@@ -41,7 +41,7 @@ from calculation.prerequisites import (
     restrict_candidates_by_budget,
 )
 from calculation.sampler import summarize_sampleset
-from config.fields import F
+from config.fields import F, field_max_distance
 from config.items import M, hours, item_fields, item_index, item_names
 from config.parameters import (
     DEFAULT_MIN_RELEVANCE,
@@ -190,15 +190,22 @@ def recommend(
     # 1. 各IT分野との相性
     # ========================================================
 
-    # 5軸には個別の重みを付けず、
-    # すべて等重みで平均二乗距離を計算する。
+    # 5軸には個別の重みを付けず、すべて等重みで平均二乗距離を計算し、
+    # その分野が取りうる距離の上限field_max_distanceで割って正規化する。
     #
-    # 完全一致：field_score = 1
-    # 不一致が大きいほど0に近づく。
+    # 完全一致                 ：field_score = 1
+    # その分野に最も適性のない人：field_score = 0
+    #
+    # 正規化しないと、プロファイルが中央(0.5)に寄った分野ほど誰に対しても
+    # 高い相性を返す（config/fields.py の field_max_distance のコメント参照）。
+    # 分野ごとに尺度を揃えることで、閾値min_relevanceがどの分野でも
+    # 同じ意味（その分野の最悪と完全一致の間のどこか）を持つ。
 
     mean_squared_difference = np.mean((F - user) ** 2, axis=1)
 
-    field_score = np.clip(1.0 - mean_squared_difference, 0.0, 1.0)
+    field_score = np.clip(
+        1.0 - mean_squared_difference / field_max_distance, 0.0, 1.0
+    )
 
     # ========================================================
     # 2. 低相性分野の寄与を0にする
@@ -211,9 +218,16 @@ def recommend(
 
     field_relevance = np.where(field_score >= min_relevance, field_score, 0.0)
 
-    # すべての分野関連度が0の場合は推薦不能
+    # 閾値を超える分野が1つも無いときは、最も相性の高い分野だけを残す。
+    #
+    # 5軸の回答がどの分野の典型像からも遠い人（実データではr5が該当する）は
+    # 全分野が閾値未満になりうる。ここでエラーにすると
+    # 「相性の低い分野しか無い人には何も勧めない」ことになってしまうため、
+    # 最良の1分野に絞ったうえで推薦を続ける。
     if np.all(field_relevance == 0.0):
-        raise RuntimeError("min_relevance以上の相性を持つIT分野がありません。")
+        best_field = int(np.argmax(field_score))
+        field_relevance = np.zeros_like(field_score)
+        field_relevance[best_field] = field_score[best_field]
 
     # ========================================================
     # 3. 学習項目の価値
@@ -282,7 +296,7 @@ def recommend(
         if not remaining:
             raise RuntimeError(
                 "推薦候補となる学習項目がありません。"
-                f"相性{min_relevance:.2f}以上の分野に属する項目は、すべて学習済みです。"
+                "推薦対象になった分野に属する項目は、すべて学習済みです。"
             )
 
         cheapest = min(min_closure_hours(name, learned) for name in remaining)
