@@ -64,7 +64,7 @@ def find_learned_prerequisite_gaps(learned):
 
     「Unityは学習済みだがC#は未習」のような自己申告の不整合である。
     仕様上これはエラーにも自動補完にもせず、自己申告を尊重して
-    警告を出すだけに留める（docs/requirements.md 第10.3節）。
+    警告を出すだけに留める（README「学習済み科目の畳み込み」）。
     未習の親は候補に残り、価値があれば推薦されうる。
 
     Returns

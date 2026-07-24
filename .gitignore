@@ -5,3 +5,4 @@ venv/
 .env
 .claude/
 inputs/data/
+output/result/

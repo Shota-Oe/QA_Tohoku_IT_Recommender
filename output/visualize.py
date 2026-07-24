@@ -8,12 +8,15 @@ from config.parameters import DEFAULT_MIN_RELEVANCE
 from output.report import sort_fields_by_score
 
 
-def plot_results(z, T, field_score, debug_info):
+def plot_results(z, T, field_score, debug_info, save_path=None):
     """分野相性・項目価値の2枚のグラフを表示する。
 
     QUBOエネルギーの分布は「アニーリングがどう動いたか」の図であって
     「何を学べばよいか」の図ではないため、推薦結果の可視化からは外してある
-    （エネルギーの値はテキストレポートに残る。docs/requirements.md 第12.4節）。
+    （エネルギーの値はテキストレポートに残るので、情報は失われない）。
+
+    ``save_path`` を渡すと、ウィンドウ表示のかわりに画像ファイルへ保存する
+    （バッチ実行用。未指定なら従来どおり ``plt.show()``）。
     """
     sorted_fields = sort_fields_by_score(
         field_score,
@@ -22,7 +25,7 @@ def plot_results(z, T, field_score, debug_info):
 
     total_hours = int(hours @ z)
 
-    _, axes = plt.subplots(1, 2, figsize=(15, 11))
+    fig, axes = plt.subplots(1, 2, figsize=(15, 11))
 
     # --------------------------------------------------------
     # 1. IT分野の相性
@@ -91,4 +94,9 @@ def plot_results(z, T, field_score, debug_info):
     axes[1].invert_yaxis()
 
     plt.tight_layout()
-    plt.show()
+
+    if save_path is not None:
+        fig.savefig(save_path, bbox_inches="tight")
+        plt.close(fig)
+    else:
+        plt.show()
